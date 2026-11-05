@@ -1,5 +1,5 @@
 name: gogogoogle
-version: 0.2.1
+version: 0.3.0
 description: Hand bulk work to Google Antigravity (agy) as a worker, then have a fresh second model check it. Runs on your Antigravity quota, not your Hermes model's.
 author: Josef Acero
 requires_hermes: ">=0.22.0"
@@ -7,3 +7,4 @@ provides_tools:
   - antigravity_delegate
   - antigravity_job
   - antigravity_stats
+  - jev_public_check
