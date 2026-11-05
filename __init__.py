@@ -77,8 +77,28 @@ def _refuse(workdir):
     return ""
 
 
+def _cooling():
+    """{model: epoch when its quota returns} for models still cooling down."""
+    try:
+        d = json.loads((_home() / "cooldown.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {m: t for m, t in d.items() if t > time.time()}
+
+
+def _cool(model, text):
+    """Remember a quota reset ('Resets in 106h27m') so later verifier chains skip the model instead of re-asking it."""
+    mt = re.search(r"Resets in (?:(\d+)h)?\s*(?:(\d+)m)?", text)
+    if not mt or not (mt.group(1) or mt.group(2)):
+        return
+    d = _cooling()
+    d[model] = time.time() + int(mt.group(1) or 0) * 3600 + int(mt.group(2) or 0) * 60
+    _home().mkdir(parents=True, exist_ok=True)
+    (_home() / "cooldown.json").write_text(json.dumps(d), encoding="utf-8")
+
+
 def _agy(prompt, cwd, model, minutes, resume=""):
-    """One agy pass. Returns (status, text, fail_kind, conversation_id). Prompt goes over stdin so long briefs fit Windows' command-line cap."""
+    """One agy pass. Returns (status, text, fail_kind, conversation_id, usage). Prompt goes over stdin so long briefs fit Windows' command-line cap."""
     agy = shutil.which("agy")
     if not agy:
         return "FAILED", "`agy` is not on PATH; install the Antigravity CLI first.", "other", "", {}
@@ -109,7 +129,10 @@ def _agy(prompt, cwd, model, minutes, resume=""):
         return "OK", res.get("response") or "(empty reply)", "", conv, res.get("usage") or {}
     text = "\n".join(x for x in (res.get("error"), err) if x) or out[-1500:]
     status = "TIMED OUT" if "print timeout" in err else "FAILED"
-    return status, text[-1500:], next((k for k, rx in FAIL_KINDS if rx.search(text)), "other"), conv, res.get("usage") or {}
+    kind = next((k for k, rx in FAIL_KINDS if rx.search(text)), "other")
+    if kind == "quota":
+        _cool(model, text)
+    return status, text[-1500:], kind, conv, res.get("usage") or {}
 
 
 def _git(cwd, *a):
@@ -135,6 +158,8 @@ def _verify(task, answer, cwd, diff=""):
              "'VERDICT: PASS' or 'VERDICT: FAIL', then the reasons.\n\nTASK:\n" + task + "\n\nREPLY:\n" + answer[:6000]
              + ("\n\nACTUAL CHANGES (git diff, may be cut):\n" + diff[:6000] if diff else ""))
     for m in VERIFIERS:
+        if m in _cooling():
+            continue  # out of quota until its reset time
         status, text, kind, _, _ = _agy(brief, cwd, m, 5)
         if status == "OK":
             ok = re.search(r"VERDICT:\s*PASS", text, re.I) is not None
@@ -229,6 +254,7 @@ def stats(args, **kwargs):
             fails[r["fail"]] = fails.get(r["fail"], 0) + 1
     avg = round(sum(r["secs"] for r in rows) / len(rows)) if rows else 0
     return json.dumps({"runs": len(rows), "by_status": by, "failed_by_reason": fails, "avg_seconds": avg,
+                       "quota_cooldown_until": {m: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) for m, t in _cooling().items()},
                        "tokens_handled_by_agy": {"in": sum(r.get("tin", 0) for r in rows), "out": sum(r.get("tout", 0) for r in rows)}})
 
 

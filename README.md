@@ -31,6 +31,15 @@ If you already have a Gemini API key and only want another model, Hermes delegat
 - **Writes:** `runs.jsonl` (time, role, model, status, seconds, token counts, failure class; no task text) and `jobs/<id>.json` (background results) in the plugin data directory. Background jobs end if Hermes restarts.
 - **No credentials stored, no telemetry, no self-update.**
 
+## Install
+
+```
+hermes plugins install josefacero/hermes-gogogoogle
+hermes plugins enable gogogoogle
+```
+
+When a model reports `Resets in 106h27m`, the plugin remembers that reset time and skips the model in later verifier chains until then. `antigravity_stats` shows `quota_cooldown_until`.
+
 ## Setup
 
 Install Antigravity and sign in (`agy`). Optional environment: `ANTIGRAVITY_MODEL` (worker), `ANTIGRAVITY_VERIFIER_MODELS` (comma list), `GOGOGOOGLE_BLOCKED_ROOTS`. Model names come from `agy models`.
