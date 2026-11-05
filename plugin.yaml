@@ -3,6 +3,18 @@ version: 0.3.0
 description: Hand bulk work to Google Antigravity (agy) as a worker, then have a fresh second model check it. Runs on your Antigravity quota, not your Hermes model's.
 author: Josef Acero
 requires_hermes: ">=0.22.0"
+config_schema:
+  worker_model:
+    type: str
+    description: Antigravity worker model name.
+  verifier_models:
+    type: list
+    description: Ordered Antigravity verifier model names.
+  blocked_roots:
+    type: list
+    description: Paths that must not be used as working directories.
+provides_hooks:
+  - pre_tool_call
 provides_tools:
   - antigravity_delegate
   - antigravity_job

@@ -83,6 +83,17 @@ class PluginTests(unittest.TestCase):
             with patch.object(plugin, "BLOCKED", [blocked.resolve()]):
                 self.assertTrue(plugin._refuse(d))
 
+    def test_empty_workdir_is_refused(self):
+        for workdir in ("", "  ", None):
+            self.assertTrue(plugin._refuse(workdir))
+
+    def test_delegate_rejects_invalid_inputs(self):
+        for args in (None, {"task": 1, "workdir": "."}, {"task": "test", "workdir": 1},
+                     {"task": "test", "workdir": ".", "resume": 1},
+                     {"task": "test", "workdir": ".", "minutes": "bad"}):
+            with self.subTest(args=args):
+                self.assertIn("error", json.loads(plugin.delegate(args)))
+
     def test_jev_is_off_by_default_and_never_replaces_verifier(self):
         with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", return_value="same"), \
              patch.object(plugin, "_agy", return_value=("OK", "public report", "", "c", {})), \
@@ -119,8 +130,79 @@ class PluginTests(unittest.TestCase):
                          {"public_text": "x" * 12001, "user_approved": True}):
                 self.assertIn("error", json.loads(plugin.jev_public_check(args)))
             jev.assert_not_called()
-            plugin.jev_public_check({"public_text": "public", "user_approved": True})
-            jev.assert_called_once_with("public")
+            self.assertIn("disabled", json.loads(plugin.jev_public_check({"public_text": "public", "user_approved": True}))["error"])
+            jev.assert_not_called()
+
+    def test_approval_contains_exact_task_and_directory(self):
+        args = {"task": "change only x", "workdir": "project", "background": True}
+        directive = plugin._approval("antigravity_delegate", args)
+        self.assertEqual(directive["action"], "approve")
+        self.assertNotEqual(directive["rule_key"], plugin._approval("antigravity_delegate", args)["rule_key"])
+        for text in (args["task"], args["workdir"], "background=True"):
+            self.assertIn(text, directive["message"])
+        self.assertIsNone(plugin._approval("antigravity_stats", args))
+
+    def test_register_exposes_approval_hook(self):
+        class Context:
+            def __init__(self):
+                self.hooks = {}
+            def register_hook(self, name, handler):
+                self.hooks[name] = handler
+            def register_tool(self, **kwargs):
+                pass
+        ctx = Context()
+        plugin.register(ctx)
+        self.assertIs(ctx.hooks["pre_tool_call"], plugin._approval)
+
+    def test_plugin_settings_override_legacy_defaults(self):
+        class Context:
+            def get_config(self, key, default):
+                return {"worker_model": "worker", "verifier_models": ["verifier"], "blocked_roots": []}.get(key, default)
+            def register_hook(self, *args):
+                pass
+            def register_tool(self, **kwargs):
+                pass
+        with patch.object(plugin, "WORKER"), patch.object(plugin, "VERIFIERS"), patch.object(plugin, "BLOCKED"):
+            plugin.register(Context())
+            self.assertEqual(plugin.WORKER, "worker")
+            self.assertEqual(plugin.VERIFIERS, ["verifier"])
+            self.assertEqual(plugin.BLOCKED, [])
+
+    def test_child_environment_does_not_inherit_provider_keys(self):
+        with patch.dict(plugin.os.environ, {"PATH": "path", "HOME": "home", "OPENAI_API_KEY": "secret", "AGY_SECRET": "secret"}, clear=True):
+            self.assertEqual(plugin._child_env(), {"PATH": "path", "HOME": "home"})
+
+    def test_worker_permissions_are_role_dependent(self):
+        class Proc:
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return ('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}', "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()) as spawn:
+            for allow in (False, True):
+                plugin._agy("task", ".", "model", 1, allow_edits=allow)
+                argv = spawn.call_args.args[0]
+                self.assertEqual("--dangerously-skip-permissions" in argv, allow)
+                self.assertEqual(spawn.call_args.kwargs["env"], plugin._child_env())
+
+    def test_git_gets_minimal_environment(self):
+        with patch.object(plugin.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            plugin._git(".", "status")
+            self.assertEqual(run.call_args.kwargs["env"], plugin._child_env())
+
+    def test_empty_response_with_denied_actions_is_failure(self):
+        class Proc:
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return ('{"event":"result","result":{"status":"SUCCESS","response":"","denied_actions":["command"]}}', "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            self.assertEqual(plugin._agy("task", ".", "model", 1)[0], "FAILED")
+
+    def test_missing_executable_is_reported(self):
+        with patch.object(plugin.shutil, "which", return_value="agy"), \
+             patch.object(plugin.subprocess, "Popen", side_effect=OSError("missing")):
+            self.assertEqual(plugin._agy("task", ".", "model", 1)[0], "FAILED")
 
 
 if __name__ == "__main__":

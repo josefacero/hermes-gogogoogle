@@ -14,7 +14,7 @@ Public repo `josefacero/hermes-gogogoogle`. Sibling (private, different code): `
 - Catalog entry: PR `NousResearch/hermes-agent#149174` pins an exact commit. Any code change after the pin means a new commit,
   a new `sha` + `version` in `plugin-catalog/gogogoogle.yaml` on the PR branch (`josefacero/hermes-agent`, branch
   `add-gogogoogle-plugin`), and a bump of `version` in `plugin.yaml`.
-- `agy` runs auto-approved: test in a throwaway git repo, never in a real project. Real runs use Antigravity quota.
+- `do` runs `agy` with permissions auto-approved after the Hermes approval gate; test in a throwaway git repo. Research, review and verifier omit the skip flag, but are not sandboxed. Real runs use Antigravity quota.
 
 ## State
 Current project state and next steps: vault `06 Handoffs\CURRENT\ai-orchestration.md` (private).

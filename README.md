@@ -11,12 +11,12 @@ Hand bulk work to Google Antigravity's `agy` CLI as a worker, then have a fresh 
   - **Resume:** a timed-out run returns its conversation id; pass it as `resume` to continue.
 - `antigravity_job(id)` - status or full result of a background run.
 - `antigravity_stats` - runs, status counts, failures by reason (`quota`, `model`, `auth`, `other`), average time, tokens handled by agy instead of your lead model.
-- Research prompts ask for sourced facts, label uncertain claims, and suggest FxTwitter for public X status links plus public pages or already-installed `yt-dlp` for Instagram and TikTok. These are best-effort routes; never extract cookies or log in automatically.
-- `jev_public_check(public_text, user_approved)` - optional Jev advisory. First show the user the exact public, sanitized excerpt, then call only with their explicit approval for that excerpt. Sends at most 12,000 characters to TypeSafe. Never send confidential, legal, personal or secret material. Set `JEV_API_KEY` in the environment. Jev does not replace verification.
+- Research prompts ask for sourced facts, label uncertain claims, and suggest FxTwitter for public X status links plus public pages for Instagram and TikTok. These are best-effort routes; research cannot run `yt-dlp` or other shell commands under the session policy. Never extract cookies or log in automatically.
+- `jev_public_check(public_text, user_approved)` - currently disabled and sends no data. A model-supplied approval flag is not a privacy consent gate.
 
-The approval flag is a cooperative instruction to the calling agent, not a verified consent prompt or a filter for sensitive data. Use it only with an agent you trust to follow that instruction.
+Hermes asks for approval before each delegation through its approval system. Each request uses a fresh key, so session or permanent approval of one request does not preapprove the next. YOLO, disabled approvals, and gateway or cron policies can bypass prompts. Do not enable automatic approval if a human must approve each call. Hermes can allow another plugin's pre-tool hook to change arguments after this plugin builds its approval message; use only trusted plugins and inspect their hooks. A failure in Hermes' outer hook dispatcher can also bypass hooks. Approval messages may appear in Hermes logs.
 
-Token counters cover worker usage reported by agy; they do not measure verifier costs or prove a net saving. Jev adds a separate API call when used.
+Token counters cover worker usage reported by agy; they do not measure verifier costs or prove a net saving.
 
 ## Why not just switch the model or spawn a subagent?
 
@@ -30,11 +30,11 @@ If you already have a Gemini API key and only want another model, Hermes delegat
 
 ## Disclosures
 
-- **Runs shell commands:** launches `agy` with `--dangerously-skip-permissions`. It can access and change files available to its OS account, including outside `workdir`. The working directory and blocked-root checks are not a sandbox. `research` and `review` are only told not to edit; Git detection can miss ignored files and modifications inside existing untracked files, and does not revert changes.
+- **Runs shell commands:** `do` launches `agy` with `--dangerously-skip-permissions` after the Hermes approval gate; `research`, `review`, and verifier passes omit the flag and request session-only rules to allow project reads and deny edits and shell commands. Enforcement depends on agy's settings and version; these rules are not an OS sandbox. agy can access files outside `workdir`. Git detection can miss ignored files and modifications inside existing untracked files, and does not revert changes.
 - **Sends data to a third party:** your task text, files agy reads and verifier excerpts go to Google through agy.
-- **Optional additional data recipient:** `jev_public_check` sends the approved excerpt to TypeSafe. The plugin cannot determine whether text is sensitive; the user must review it before approving each call.
+- **Jev:** disabled until a privacy consent mechanism is independently enforced; it sends no data.
 - **Reads outside its own data:** agy can access files as the current OS user. The plugin refuses a drive root, your home folder and paths inside or containing `GOGOGOOGLE_BLOCKED_ROOTS` (path-separator list). Use OS isolation for a hard boundary.
-- **Runs `git`:** read-only `git diff`, `git status`, `git ls-files` in `workdir`. The diff (up to 6,000 characters) goes to the verifier model.
+- **Runs `git`:** `git diff`, `git status`, `git ls-files` in `workdir`. The diff (up to 6,000 characters) goes to the verifier model. agy and git receive a limited environment without inherited provider API keys, but can still access files permitted to the OS user.
 - **Writes:** `runs.jsonl` (time, role, model, status, seconds, token counts, failure class; no task text) and `jobs/<id>.json` (background results) in the plugin data directory. After a restart, a running job's status is unknown; a subprocess may still be running.
 - **No credentials stored, no telemetry, no self-update.**
 
@@ -49,4 +49,4 @@ When a model reports `Resets in 106h27m`, the plugin remembers that reset time a
 
 ## Setup
 
-Install Antigravity and sign in (`agy`). Optional environment: `ANTIGRAVITY_MODEL` (worker), `ANTIGRAVITY_VERIFIER_MODELS` (comma list), `GOGOGOOGLE_BLOCKED_ROOTS`. Model names come from `agy models`.
+Install Antigravity and sign in (`agy`). Optional plugin settings under `plugins.entries.gogogoogle.settings` are `worker_model` (string), `verifier_models` (list of strings), and `blocked_roots` (list of paths). Model names come from `agy models`. The previous environment variables remain fallback values when these settings are absent.
