@@ -5,4 +5,5 @@ author: Josef Acero
 requires_hermes: ">=0.22.0"
 provides_tools:
   - antigravity_delegate
+  - antigravity_job
   - antigravity_stats
