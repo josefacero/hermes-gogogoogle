@@ -378,6 +378,55 @@ class PluginTests(unittest.TestCase):
         self.assertIn("not a sandbox", ask("review"))
         self.assertNotIn("skips", ask("review"))
 
+    def test_blocked_root_equal_inside_and_message(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve() / "private"
+            (root / "sub").mkdir(parents=True)
+            with patch.object(plugin, "BLOCKED", [root]):
+                for workdir in (root, root / "sub"):
+                    with self.subTest(workdir=str(workdir)):
+                        why = plugin._refuse(str(workdir))
+                        self.assertIn("blocked root", why)
+                        self.assertIn("blocked_roots", why)
+                        self.assertIn("GOGOGOOGLE_BLOCKED_ROOTS", why)
+                other = Path(d).resolve() / "other"
+                other.mkdir()
+                self.assertEqual(plugin._refuse(str(other)), "")
+
+    def _register_with(self, roots):
+        class Context:
+            def get_config(self, key, default):
+                return {"worker_model": "w", "verifier_models": ["v"], "blocked_roots": roots}.get(key, default)
+            def register_hook(self, *args):
+                pass
+            def register_tool(self, **kwargs):
+                pass
+        plugin.register(Context())
+
+    def test_register_blocked_roots_list_string_and_bad_type(self):
+        with patch.object(plugin, "WORKER"), patch.object(plugin, "VERIFIERS"), patch.object(plugin, "BLOCKED"):
+            with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+                self._register_with([a, b])
+                self.assertEqual(plugin.BLOCKED, [Path(a).resolve(), Path(b).resolve()])
+                self._register_with(a)  # a plain string is one path, not a crash
+                self.assertEqual(plugin.BLOCKED, [Path(a).resolve()])
+                self._register_with(a + plugin.os.pathsep + b)
+                self.assertEqual(plugin.BLOCKED, [Path(a).resolve(), Path(b).resolve()])
+            for bad in (5, {"x": 1}, [1], [""], ["ok", None]):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    self._register_with(bad)
+
+    def test_every_tool_description_names_gogogoogle(self):
+        for schema in (plugin.DELEGATE, plugin.JOB, plugin.STATS):
+            self.assertTrue(schema["description"].startswith("gogogoogle:"), schema["name"])
+        manifest = (Path(__file__).with_name("plugin.yaml")).read_text(encoding="utf-8")
+        self.assertRegex(manifest, r'(?m)^description: "?gogogoogle:')
+
+    def test_status_codes_need_word_boundaries(self):
+        kind = lambda t: next((k for k, rx in plugin.FAIL_KINDS if rx.search(t)), "other")
+        self.assertEqual([kind(t) for t in ("HTTP 429 too many", "HTTP 403 Forbidden", "HTTP 401", "id 14290 done", "port 14010 closed", "file 40312.txt")],
+                         ["quota", "auth", "auth", "other", "other", "other"])
+
 
 if __name__ == "__main__":
     unittest.main()

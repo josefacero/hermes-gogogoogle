@@ -2,6 +2,10 @@
 
 Hand bulk work to Google Antigravity's `agy` CLI as a worker, then have a fresh second model check the result.
 
+## Use it
+
+Name the plugin in your request: "Use gogogoogle to review the changes in this repo", "Use gogogoogle to research <question>", "Use gogogoogle to write the tests in <folder>". Hermes then calls the tools below and asks you to approve each delegation first.
+
 ## Tools
 
 - `antigravity_delegate(task, workdir, role, minutes, verify, background, resume)` - roles `do`, `research`, `review`.
@@ -32,7 +36,7 @@ If you already have a Gemini API key and only want another model, Hermes delegat
 
 - **Runs shell commands:** `do` launches `agy` with `--dangerously-skip-permissions` after the Hermes approval gate; `research`, `review`, and verifier passes omit the flag and request session-only rules to allow project reads and deny edits and shell commands. Enforcement depends on agy's settings and version; these rules are not an OS sandbox. In testing with agy 1.5.1 the rules blocked writes and shell commands but not reads outside `workdir`. agy still reports success after a blocked action, so the plugin appends a note listing the blocked tools to the result. agy can access files outside `workdir`. Git detection can miss ignored files and modifications inside existing untracked files, and does not revert changes.
 - **Sends data to a third party:** your task text, files agy reads and verifier excerpts go to Google through agy.
-- **Reads outside its own data:** agy can access files as the current OS user. The plugin refuses a drive root, your home folder and paths inside or containing `GOGOGOOGLE_BLOCKED_ROOTS` (path-separator list). Use OS isolation for a hard boundary.
+- **Reads outside its own data:** agy can access files as the current OS user. The plugin refuses a drive root, your home folder and paths inside or containing a blocked root. Set roots with the `blocked_roots` plugin setting (a list of paths) or, as a fallback, the `GOGOGOOGLE_BLOCKED_ROOTS` environment variable (path-separator list). Use OS isolation for a hard boundary.
 - **Runs `git`:** `git diff`, `git status`, `git ls-files` in `workdir`. The diff (up to 6,000 characters) goes to the verifier model. agy and git receive a limited environment without inherited provider API keys, but can still access files permitted to the OS user.
 - **Writes:** `runs.jsonl` (time, role, model, status, seconds, token counts, failure class; no task text) and `jobs/<id>.json` (background results) in the plugin data directory. After a restart, a running job's status is unknown; a subprocess may still be running.
 - **No credentials stored, no telemetry, no self-update.**

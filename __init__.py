@@ -34,15 +34,15 @@ ROLES = {
     "review": "Review only. Do not modify any file. Reply with problems ranked worst first, each with file and line.",
 }
 # Why a run failed, so a dead model, empty quota or busy service moves to the next model but a real error does not.
-FAIL_KINDS = [("quota", re.compile(r"quota|rate.?limit|exhausted|429", re.I)),
+FAIL_KINDS = [("quota", re.compile(r"quota|rate.?limit|exhausted|\b429\b", re.I)),
               ("model", re.compile(r"(?:unknown|invalid|unsupported) model|model[^\n]{0,60}not found|not found[^\n]{0,60}model", re.I)),
-              ("auth", re.compile(r"auth|sign.?in|login|401|403", re.I)),
+              ("auth", re.compile(r"auth|sign.?in|login|\b401\b|\b403\b", re.I)),
               ("busy", re.compile(r"\b503\b|unavailable|overloaded", re.I))]
 
 DELEGATE = {
     "name": "antigravity_delegate",
     "description": (
-        "Hand a bulk task (mass edits, file generation, broad reading, first-draft research, second-opinion review) to the "
+        "gogogoogle: hand a bulk task (mass edits, file generation, broad reading, first-draft research, second-opinion review) to the "
         "Antigravity `agy` CLI. It runs on the user's Antigravity quota. Hermes requests approval before delegation. "
         "WARNING: do runs auto-approve agy permissions and can access or modify files outside workdir. "
         "With verify=true a fresh model checks the result; the outcome can be PASS, FAIL, LIMITED, INCOMPLETE, INCONCLUSIVE or SKIPPED."),
@@ -55,11 +55,11 @@ DELEGATE = {
         "background": {"type": "boolean", "description": "Return a job id at once; poll it with antigravity_job. Use for runs over a minute."},
         "resume": {"type": "string", "description": "A conversation id from an earlier run (for example after TIMED OUT); task is then the follow-up."}},
         "required": ["task", "workdir"]}}
-JOB = {"name": "antigravity_job", "description": "Check a background antigravity_delegate job. Returns RUNNING, or the full result once done.",
+JOB = {"name": "antigravity_job", "description": "gogogoogle: check a background antigravity_delegate job. Returns RUNNING, or the full result once done.",
        "parameters": {"type": "object", "properties": {"id": {"type": "string", "description": "Job id from antigravity_delegate."}},
                       "required": ["id"]}}
 STATS = {"name": "antigravity_stats",
-         "description": "Show how many delegated runs succeeded, failed (and why), and their average time.",
+         "description": "gogogoogle: show how many delegated runs succeeded, failed (and why), and their average time.",
          "parameters": {"type": "object", "properties": {}}}
 
 
@@ -89,7 +89,7 @@ def _refuse(workdir):
         return "workdir is a drive root or your home folder; pick a project folder"
     for b in BLOCKED:
         if p == b or b in p.parents or p in b.parents:
-            return f"workdir is inside a blocked root ({b}); set by GOGOGOOGLE_BLOCKED_ROOTS"
+            return f"workdir is inside or contains a blocked root ({b}); set by the blocked_roots plugin setting or GOGOGOOGLE_BLOCKED_ROOTS"
     return ""
 
 
@@ -418,6 +418,8 @@ def register(ctx):
         worker = ctx.get_config("worker_model", WORKER)
         verifiers = ctx.get_config("verifier_models", VERIFIERS)
         roots = ctx.get_config("blocked_roots", [str(p) for p in BLOCKED])
+        if isinstance(roots, str):  # a single path typed as a plain string, or an os.pathsep list
+            roots = [r for r in roots.split(os.pathsep) if r.strip()]
         if (not isinstance(worker, str) or not worker.strip()
                 or not isinstance(verifiers, list) or not verifiers or not all(isinstance(v, str) and v.strip() for v in verifiers)
                 or not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots)):
