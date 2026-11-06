@@ -176,8 +176,9 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(plugin.BLOCKED, [])
 
     def test_child_environment_does_not_inherit_provider_keys(self):
-        with patch.dict(plugin.os.environ, {"PATH": "path", "HOME": "home", "OPENAI_API_KEY": "secret", "AGY_SECRET": "secret"}, clear=True):
-            self.assertEqual(plugin._child_env(), {"PATH": "path", "HOME": "home"})
+        with patch.dict(plugin.os.environ, {"PATH": "path", "HOME": "home", "ProgramFiles": "pf", "OPENAI_API_KEY": "secret",
+                                            "AGY_SECRET": "secret"}, clear=True):
+            self.assertEqual({k.upper(): v for k, v in plugin._child_env().items()}, {"PATH": "path", "HOME": "home", "PROGRAMFILES": "pf"})
 
     def test_worker_permissions_are_role_dependent(self):
         class Proc:
@@ -225,6 +226,53 @@ class PluginTests(unittest.TestCase):
         self.assertEqual((status, conv), ("OK", "c1"))
         self.assertTrue(text.startswith("could not write"))
         self.assertIn("blocked: write_file.", text)
+
+    def test_agy_review_fixes(self):
+        # Leading blank line before a valid verdict still counts.
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "\nVERDICT: PASS\nok", "", "", {})) as agy:
+            self.assertTrue(plugin._verify("t", "a" * 7000, ".").startswith("VERIFY PASS"))
+            self.assertIn("Reply cut at 6,000 characters", agy.call_args.args[0])
+        # A read-only violation fails even when the verifier was skipped.
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", side_effect=["b", "a", "a"]), \
+             patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})), \
+             patch.object(plugin, "_git", return_value=""), patch.object(plugin, "_log"), \
+             patch.object(plugin, "_verify", return_value="VERIFY SKIPPED: no verifier model answered"):
+            self.assertTrue(plugin._work("look", d, "research", 1, True, "")["verify"].startswith("VERIFY FAIL"))
+        # agy's own print timeout without a result event keeps the init conversation id; error dicts do not crash.
+        class Proc:
+            returncode = 1
+            def communicate(self, *args, **kwargs):
+                return ('{"event":"init","conversation_id":"c9"}\n{"event":"result","result":{"error":{"type":"x"}}}',
+                        "print timeout reached")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            status, _, _, conv, _ = plugin._agy("task", ".", "model", 1)
+        self.assertEqual((status, conv), ("TIMED OUT", "c9"))
+        # Models often send null for optional arguments.
+        with patch.object(plugin, "_refuse", return_value="stop"):
+            self.assertIn("REFUSED", json.loads(plugin.delegate({"task": "t", "workdir": ".", "role": None, "resume": None}))["error"])
+
+    def test_browser_snapshots_are_not_worker_edits(self):
+        def git(cwd, *a):
+            return "" if a[0] == "diff" else "notes.md\n" + self.extra
+        with patch.object(plugin, "_git", side_effect=git):
+            self.extra = ""
+            plain = plugin._snap(".")
+            self.extra = ".playwright-mcp/page-1.yml\n.playwright-mcp/console-1.log\n"
+            self.assertEqual(plugin._snap("."), plain)
+            self.extra = "new_file.py\n"
+            self.assertNotEqual(plugin._snap("."), plain)
+
+    def test_denied_actions_given_as_dicts_are_named(self):
+        stream = '{"event":"result","result":{"status":"SUCCESS","response":"","denied_actions":[{"action":"mcp","display_name":"CallMcpTool"}]}}'
+        class Proc:
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return (stream, "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            status, text, *_ = plugin._agy("task", ".", "model", 1)
+        self.assertEqual(status, "FAILED")
+        self.assertIn("blocked: CallMcpTool.", text)
 
     def test_missing_executable_is_reported(self):
         with patch.object(plugin.shutil, "which", return_value="agy"), \

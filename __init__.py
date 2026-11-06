@@ -22,6 +22,7 @@ ROLES = {
                  "claim with a URL or file and line. Distinguish observed facts from inference. Copy dates and numbers "
                  "from sources opened in this run. Put claims without evidence and inaccessible sources in Unverified; "
                  "never present snippets or old notes as independently verified. The lead must check sources before acting. "
+                 "Fetch pages with read_url_content or search_web; use the browser only when a page needs it. "
                  "Public X status URL: try https://api.fxtwitter.com/status/<id> "
                  "if direct access fails; it is a third-party service and is not guaranteed. For public Instagram or TikTok "
                  "posts, use public pages when available; say if access fails. "
@@ -112,8 +113,9 @@ def _cool(model, text):
 
 def _child_env():
     # Keep OS paths needed by agy on Windows and Unix; never inherit provider keys.
+    # PROGRAMFILES* lets agy's browser tools find Chrome in C:\Program Files.
     names = {"PATH", "PATHEXT", "COMSPEC", "SYSTEMDRIVE", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "APPDATA", "LOCALAPPDATA",
-             "TMP", "TEMP", "TMPDIR", "LANG", "LANGUAGE"}
+             "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "PROGRAMDATA", "TMP", "TEMP", "TMPDIR", "LANG", "LANGUAGE"}
     return {k: v for k, v in os.environ.items() if k.upper() in names or k.startswith("LC_")}
 
 
@@ -147,7 +149,7 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
         # Keep any conversation id agy streamed before the kill so the run can be resumed.
         conv = (re.findall(r'"conversation_id"\s*:\s*"([^"]+)"', out or "") or [resume])[-1]
         return "TIMED OUT", (out or "")[-2000:], "other", conv, {}
-    res, denied = {}, []
+    res, denied, conv = {}, [], ""
     for line in out.splitlines():
         try:
             ev = json.loads(line)
@@ -155,6 +157,7 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
             continue
         if not isinstance(ev, dict):
             continue
+        conv = str(ev.get("conversation_id") or conv)  # the init event has it even if no result arrives
         if ev.get("event") == "result":
             res = ev.get("result") or {}
         # agy 1.5.1 reports a blocked tool only as an ERROR step; its result still says SUCCESS.
@@ -162,15 +165,17 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
         error = ((step.get("tool_info") or {}).get("error") or {}).get("message") or ""
         if step.get("state") == "ERROR" and "Permission denied" in str(error):
             denied.append(str(step.get("tool_name") or "tool"))
-    denied += [str(a) for a in res.get("denied_actions") or []]
-    conv = res.get("conversation_id", "")
+    # agy 1.5.1 can list denied_actions as dicts such as {"action": "mcp", "display_name": "CallMcpTool"}.
+    denied += [str(a.get("display_name") or a.get("action")) if isinstance(a, dict) else str(a)
+               for a in res.get("denied_actions") or []]
+    conv = str(res.get("conversation_id") or conv)
     note = ("\n\n[gogogoogle] agy permission rules blocked: " + ", ".join(sorted(set(denied)))
             + ". The result may be incomplete.") if denied else ""
     if denied and not (res.get("response") or "").strip():
         return "FAILED", "agy denied one or more actions and gave no reply." + note, "other", conv, res.get("usage") or {}
     if p.returncode == 0 and res.get("status") == "SUCCESS" and "print timeout" not in err:
         return "OK", (res.get("response") or "(empty reply)") + note, "", conv, res.get("usage") or {}
-    text = "\n".join(x for x in (res.get("error"), err) if x) or out[-1500:]
+    text = "\n".join(str(x) for x in (res.get("error"), err) if x) or out[-1500:]
     status = "TIMED OUT" if "print timeout" in err else "FAILED"
     kind = next((k for k, rx in FAIL_KINDS if rx.search(text)), "other")
     if kind == "quota":
@@ -192,6 +197,8 @@ def _snap(cwd):
     """Fingerprint of tracked changes plus the untracked file list. shortcut: edits inside an already-untracked file
     are not seen; upgrade by hashing untracked contents if that matters."""
     d, u = _git(cwd, "diff", "HEAD"), _git(cwd, "ls-files", "-o", "--exclude-standard")
+    if u is not None:  # agy's browser tool drops page snapshots here; they are not worker edits
+        u = "\n".join(x for x in u.splitlines() if not x.startswith(".playwright-mcp/"))
     return None if d is None or u is None else hashlib.sha256((d + "\0" + u).encode("utf-8", "replace")).hexdigest()
 
 
@@ -214,6 +221,8 @@ def _verify(task, answer, cwd, diff=""):
              "sources directly where accessible, distinguish observations from inference, and note any missing task items. "
              "If evidence cannot be read, do not return PASS; explain the limitation. Do not modify anything. First line of your reply must be "
              "'VERDICT: PASS' or 'VERDICT: FAIL', then the reasons.\n\nTASK:\n" + task + "\n\nREPLY:\n" + answer[:6000]
+             + ("\n[Reply cut at 6,000 characters by the plugin; do not count the missing tail as missing work.]"
+                if len(answer) > 6000 else "")
              + ("\n\nACTUAL CHANGES (git diff, may be cut):\n" + diff[:6000] if diff else ""))
     for m in VERIFIERS:
         if m in _cooling():
@@ -221,7 +230,7 @@ def _verify(task, answer, cwd, diff=""):
         status, text, kind, _, _ = _agy(brief, cwd, m, 5)
         if status == "OK":
             verdicts = re.findall(r"(?im)^VERDICT:[ \t]*(PASS|FAIL)[ \t]*$", text)
-            first = text.splitlines()[0].strip() if text.splitlines() else ""
+            first = text.strip().splitlines()[0].strip() if text.strip() else ""
             if len(verdicts) != 1 or first.upper() != f"VERDICT: {verdicts[0].upper()}":
                 return f"VERIFY INCONCLUSIVE ({m}): verifier did not return one valid first-line verdict\n{text[:1500]}"
             return f"VERIFY {verdicts[0].upper()} ({m})\n{text[:1500]}"
@@ -279,7 +288,7 @@ def _work(task, workdir, role, minutes, verify, resume):
             if initial_status:
                 out["verify"] = out["verify"].replace("VERIFY PASS", "VERIFY LIMITED", 1) + "\nThe worktree already had changes; the diff may include prior work."
         if "warning" in out:  # a read-only role that edited files never passes
-            out["verify"] = re.sub(r"^VERIFY (PASS|LIMITED|INCOMPLETE)", "VERIFY FAIL", out["verify"], count=1) + "\nRead-only role changed the working tree."
+            out["verify"] = re.sub(r"^VERIFY [A-Z]+", "VERIFY FAIL", out["verify"], count=1) + "\nRead-only role changed the working tree."
     return out
 
 
@@ -300,7 +309,7 @@ def _jwrite(jid, data):
 def delegate(args, **kwargs):
     if not isinstance(args, dict) or not isinstance(args.get("task"), str) or not isinstance(args.get("workdir"), str):
         return json.dumps({"error": "task and workdir must be strings"})
-    if not isinstance(args.get("role", "do"), str) or not isinstance(args.get("resume", ""), str):
+    if not isinstance(args.get("role") or "do", str) or not isinstance(args.get("resume") or "", str):  # models send null
         return json.dumps({"error": "role and resume must be strings"})
     task, workdir = (args.get("task") or "").strip(), args.get("workdir") or ""
     role, resume = args.get("role") or "do", (args.get("resume") or "").strip()
