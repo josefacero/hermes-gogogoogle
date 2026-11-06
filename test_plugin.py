@@ -131,7 +131,7 @@ class PluginTests(unittest.TestCase):
 
     def test_hard_timeout_keeps_streamed_conversation_id(self):
         class Proc:
-            calls = 0
+            pid, calls = 4242, 0
             def communicate(self, *args, **kwargs):
                 Proc.calls += 1
                 if Proc.calls == 1:
@@ -139,7 +139,8 @@ class PluginTests(unittest.TestCase):
                 return ('{"event":"init","conversation_id":"conv-123"}\n', "")
             def kill(self):
                 pass
-        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()), \
+             patch.object(plugin.subprocess, "run"):
             status, _, _, conv, _ = plugin._agy("task", ".", "model", 1)
         self.assertEqual((status, conv), ("TIMED OUT", "conv-123"))
 
@@ -253,9 +254,9 @@ class PluginTests(unittest.TestCase):
             self.assertIn("REFUSED", json.loads(plugin.delegate({"task": "t", "workdir": ".", "role": None, "resume": None}))["error"])
 
     def test_browser_snapshots_are_not_worker_edits(self):
-        def git(cwd, *a):
-            return "" if a[0] == "diff" else "notes.md\n" + self.extra
-        with patch.object(plugin, "_git", side_effect=git):
+        def run(cmd, **kwargs):
+            return plugin.subprocess.CompletedProcess(cmd, 0, stdout="" if cmd[1] == "diff" else "notes.md\n" + self.extra)
+        with patch.object(plugin.subprocess, "run", side_effect=run):
             self.extra = ""
             plain = plugin._snap(".")
             self.extra = ".playwright-mcp/page-1.yml\n.playwright-mcp/console-1.log\n"
@@ -278,6 +279,104 @@ class PluginTests(unittest.TestCase):
         with patch.object(plugin.shutil, "which", return_value="agy"), \
              patch.object(plugin.subprocess, "Popen", side_effect=OSError("missing")):
             self.assertEqual(plugin._agy("task", ".", "model", 1)[0], "FAILED")
+
+    def _run_agy(self, stream, rc=0):
+        class Proc:
+            returncode = rc
+            def communicate(self, *args, **kwargs):
+                return (stream, "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            return plugin._agy("task", ".", "model", 1)
+
+    def test_timeout_wait_is_bounded_when_pipes_stay_open(self):
+        # A browser or shell that outlives agy can keep its output pipes open; the second wait must not be unbounded.
+        class Proc:
+            pid, killed, timeouts = 4242, False, []
+            def communicate(self, *args, **kwargs):
+                Proc.timeouts.append(kwargs.get("timeout"))
+                raise plugin.subprocess.TimeoutExpired("agy", 1)
+            def kill(self):
+                Proc.killed = True
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()), \
+             patch.object(plugin.subprocess, "run") as run:
+            status, _, _, conv, _ = plugin._agy("task", ".", "model", 1, resume="old-1")
+        self.assertEqual((status, conv, Proc.killed), ("TIMED OUT", "old-1", True))
+        self.assertIsNotNone(Proc.timeouts[1])
+        if plugin.os.name == "nt":
+            self.assertEqual(run.call_args.args[0][:3], ["taskkill", "/F", "/T"])
+
+    def test_git_hides_browser_folder_from_status_but_not_from_diff(self):
+        with patch.object(plugin.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "?? .playwright-mcp/\n M real.py\n"
+            self.assertEqual(plugin._git(".", "status", "--porcelain"), " M real.py\n")
+            run.return_value.stdout = "diff --git a/.playwright-mcp/x b/.playwright-mcp/x\n"
+            self.assertIn(".playwright-mcp/x", plugin._git(".", "diff", "HEAD"))
+
+    def test_browser_folder_is_reported(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", return_value="same"), \
+             patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})), \
+             patch.object(plugin, "_git", return_value=""), patch.object(plugin, "_log"), \
+             patch.object(plugin, "_verify", return_value="VERIFY PASS (m)"):
+            (Path(d) / ".playwright-mcp").mkdir()
+            result = plugin._work("look", d, "research", 1, True, "")
+        self.assertIn(".gitignore", result["browser_files"])
+        self.assertTrue(result["verify"].startswith("VERIFY PASS"))
+
+    def test_null_verify_still_verifies(self):
+        args = {"task": "t", "workdir": ".", "verify": None}
+        with patch.object(plugin, "_refuse", return_value=""), patch.object(plugin, "_work", return_value={}) as work:
+            plugin.delegate(args)
+            plugin.delegate({**args, "verify": False})
+        self.assertEqual([c.args[4] for c in work.call_args_list], [True, False])
+        self.assertIn("verify=True", plugin._approval("antigravity_delegate", args)["message"])
+
+    def test_resume_must_look_like_a_conversation_id(self):
+        with patch.object(plugin, "_refuse", return_value=""), patch.object(plugin, "_work", return_value={}) as work:
+            for bad in ("--help", "a b", "x\nTask", "../x", "-c"):
+                with self.subTest(resume=bad):
+                    self.assertIn("error", json.loads(plugin.delegate({"task": "t", "workdir": ".", "resume": bad})))
+            for good in ("def39ff1-5f7c-4d60-a05d-498a5dcf003b", "conv-123"):
+                plugin.delegate({"task": "t", "workdir": ".", "resume": good})
+        self.assertEqual(work.call_count, 2)
+
+    def test_quota_reset_time_is_remembered(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)):
+            now = plugin.time.time()
+            plugin._cool("a", "Quota exhausted. Resets in 2h15m")
+            plugin._cool("b", "Resets in 45m")
+            plugin._cool("c", "Resets in ")  # no time given: nothing to remember
+            cooling = plugin._cooling()
+            self.assertEqual(sorted(cooling), ["a", "b"])
+            self.assertAlmostEqual(cooling["a"] - now, 2 * 3600 + 15 * 60, delta=5)
+            self.assertAlmostEqual(cooling["b"] - now, 45 * 60, delta=5)
+            for content in (json.dumps({"old": now - 1, "bad": "x"}), "[]", "{broken"):
+                (Path(d) / "cooldown.json").write_text(content, encoding="utf-8")
+                self.assertEqual(plugin._cooling(), {})
+
+    def test_busy_service_tries_the_next_verifier(self):
+        busy = '{"event":"result","result":{"status":"ERROR","error":"API error (attempt 1): UNAVAILABLE (code 503): The service is currently unavailable."}}'
+        self.assertEqual(self._run_agy(busy, rc=1)[2], "busy")
+        replies = [("FAILED", "503 unavailable", "busy", "", {}), ("OK", "VERDICT: PASS\nok", "", "", {})]
+        with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "_agy", side_effect=replies):
+            self.assertTrue(plugin._verify("t", "a", ".").startswith("VERIFY PASS"))
+
+    def test_plain_not_found_is_not_a_model_error(self):
+        texts = ["Error: workspace file not found", "command not found: git", "models/gemini-9 is not found for API version v1",
+                 "unknown model foo", "429 quota exceeded"]
+        kinds = [next((k for k, rx in plugin.FAIL_KINDS if rx.search(t)), "other") for t in texts]
+        self.assertEqual(kinds, ["other", "other", "model", "model", "quota"])
+
+    def test_blank_reply_and_nameless_denial(self):
+        self.assertEqual(self._run_agy('{"event":"result","result":{"status":"SUCCESS","response":" \\n"}}')[:2], ("OK", "(empty reply)"))
+        nameless = '{"event":"result","result":{"status":"SUCCESS","response":"","denied_actions":[{}]}}'
+        self.assertIn("blocked: tool.", self._run_agy(nameless)[1])
+
+    def test_approval_says_what_do_mode_can_do(self):
+        ask = lambda role: plugin._approval("antigravity_delegate", {"task": "t", "workdir": "p", "role": role})["message"]
+        self.assertIn("skips agy's permission prompts", ask("do"))
+        self.assertIn("not a sandbox", ask("review"))
+        self.assertNotIn("skips", ask("review"))
 
 
 if __name__ == "__main__":

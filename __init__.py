@@ -7,13 +7,14 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 
 WORKER = os.environ.get("ANTIGRAVITY_MODEL", "gemini-3.8-flash-high")
 # Verifier chain: first model that answers wins. Override with a comma list; names come from `agy models`.
 VERIFIERS = [m.strip() for m in os.environ.get(
     "ANTIGRAVITY_VERIFIER_MODELS", "claude-sonnet-5-5-low,gemini-4-argon-high,gemini-3.8-flash-high").split(",") if m.strip()]
-BLOCKED = [Path(p).resolve() for p in os.environ.get("GOGOGOOGLE_BLOCKED_ROOTS", "").split(os.pathsep) if p.strip()]
+BLOCKED = [Path(p).expanduser().resolve() for p in os.environ.get("GOGOGOOGLE_BLOCKED_ROOTS", "").split(os.pathsep) if p.strip()]
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PROCESS_ID = os.urandom(16).hex()
 ROLES = {
@@ -32,10 +33,11 @@ ROLES = {
                  "Reply with Summary, Findings, Details, Unverified."),
     "review": "Review only. Do not modify any file. Reply with problems ranked worst first, each with file and line.",
 }
-# Why a run failed, so a dead model or empty quota moves to the next model but a real error does not.
+# Why a run failed, so a dead model, empty quota or busy service moves to the next model but a real error does not.
 FAIL_KINDS = [("quota", re.compile(r"quota|rate.?limit|exhausted|429", re.I)),
-              ("model", re.compile(r"unknown model|invalid model|not found|unsupported model", re.I)),
-              ("auth", re.compile(r"auth|sign.?in|login|401|403", re.I))]
+              ("model", re.compile(r"(?:unknown|invalid|unsupported) model|model[^\n]{0,60}not found|not found[^\n]{0,60}model", re.I)),
+              ("auth", re.compile(r"auth|sign.?in|login|401|403", re.I)),
+              ("busy", re.compile(r"\b503\b|unavailable|overloaded", re.I))]
 
 DELEGATE = {
     "name": "antigravity_delegate",
@@ -97,7 +99,9 @@ def _cooling():
         d = json.loads((_home() / "cooldown.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {m: t for m, t in d.items() if t > time.time()}
+    if not isinstance(d, dict):
+        return {}
+    return {m: t for m, t in d.items() if isinstance(t, (int, float)) and t > time.time()}
 
 
 def _cool(model, text):
@@ -117,6 +121,16 @@ def _child_env():
     names = {"PATH", "PATHEXT", "COMSPEC", "SYSTEMDRIVE", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "APPDATA", "LOCALAPPDATA",
              "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "PROGRAMDATA", "TMP", "TEMP", "TMPDIR", "LANG", "LANGUAGE"}
     return {k: v for k, v in os.environ.items() if k.upper() in names or k.startswith("LC_")}
+
+
+def _kill_tree(p):
+    """Kill agy and what it started. A browser or shell that outlives agy keeps its output pipes open, and communicate() then waits on it."""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, timeout=10, creationflags=NOWIN)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # falls back to killing agy alone
+    p.kill()  # shortcut: no tree kill off Windows; the bounded wait in _agy still ends the call, add killpg if POSIX hangs show up
 
 
 def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
@@ -144,8 +158,11 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
     try:
         out, err = p.communicate(msg, timeout=minutes * 60 + 60)
     except subprocess.TimeoutExpired:
-        p.kill()
-        out, err = p.communicate()
+        _kill_tree(p)
+        try:
+            out, err = p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out = ""  # something outside agy's process tree still holds the pipes; give up on the output
         # Keep any conversation id agy streamed before the kill so the run can be resumed.
         conv = (re.findall(r'"conversation_id"\s*:\s*"([^"]+)"', out or "") or [resume])[-1]
         return "TIMED OUT", (out or "")[-2000:], "other", conv, {}
@@ -166,15 +183,16 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
         if step.get("state") == "ERROR" and "Permission denied" in str(error):
             denied.append(str(step.get("tool_name") or "tool"))
     # agy 1.5.1 can list denied_actions as dicts such as {"action": "mcp", "display_name": "CallMcpTool"}.
-    denied += [str(a.get("display_name") or a.get("action")) if isinstance(a, dict) else str(a)
+    denied += [str(a.get("display_name") or a.get("action") or "tool") if isinstance(a, dict) else str(a)
                for a in res.get("denied_actions") or []]
     conv = str(res.get("conversation_id") or conv)
     note = ("\n\n[gogogoogle] agy permission rules blocked: " + ", ".join(sorted(set(denied)))
             + ". The result may be incomplete.") if denied else ""
-    if denied and not (res.get("response") or "").strip():
+    reply = (res.get("response") or "").strip()
+    if denied and not reply:
         return "FAILED", "agy denied one or more actions and gave no reply." + note, "other", conv, res.get("usage") or {}
     if p.returncode == 0 and res.get("status") == "SUCCESS" and "print timeout" not in err:
-        return "OK", (res.get("response") or "(empty reply)") + note, "", conv, res.get("usage") or {}
+        return "OK", (reply or "(empty reply)") + note, "", conv, res.get("usage") or {}
     text = "\n".join(str(x) for x in (res.get("error"), err) if x) or out[-1500:]
     status = "TIMED OUT" if "print timeout" in err else "FAILED"
     kind = next((k for k, rx in FAIL_KINDS if rx.search(text)), "other")
@@ -190,15 +208,17 @@ def _git(cwd, *a):
                            timeout=30, creationflags=NOWIN, env=_child_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return r.stdout if r.returncode == 0 else None
+    if r.returncode != 0:
+        return None
+    if a[0] in ("status", "ls-files"):  # agy's browser tool leaves .playwright-mcp/ snapshots; they are not worker edits
+        return "".join(x for x in r.stdout.splitlines(True) if ".playwright-mcp/" not in x)
+    return r.stdout
 
 
 def _snap(cwd):
     """Fingerprint of tracked changes plus the untracked file list. shortcut: edits inside an already-untracked file
     are not seen; upgrade by hashing untracked contents if that matters."""
     d, u = _git(cwd, "diff", "HEAD"), _git(cwd, "ls-files", "-o", "--exclude-standard")
-    if u is not None:  # agy's browser tool drops page snapshots here; they are not worker edits
-        u = "\n".join(x for x in u.splitlines() if not x.startswith(".playwright-mcp/"))
     return None if d is None or u is None else hashlib.sha256((d + "\0" + u).encode("utf-8", "replace")).hexdigest()
 
 
@@ -234,7 +254,7 @@ def _verify(task, answer, cwd, diff=""):
             if len(verdicts) != 1 or first.upper() != f"VERDICT: {verdicts[0].upper()}":
                 return f"VERIFY INCONCLUSIVE ({m}): verifier did not return one valid first-line verdict\n{text[:1500]}"
             return f"VERIFY {verdicts[0].upper()} ({m})\n{text[:1500]}"
-        if kind not in ("quota", "model", "auth"):
+        if kind not in ("quota", "model", "auth", "busy"):
             return f"VERIFY SKIPPED: {m} {status}: {text[:300]}"
     return "VERIFY SKIPPED: no verifier model answered"
 
@@ -266,6 +286,9 @@ def _work(task, workdir, role, minutes, verify, resume):
         if changed and role != "do":  # read-only roles are enforced by checking, not trusting
             out["warning"] = (f"READ-ONLY VIOLATION: role '{role}' must not edit files but the working tree changed. "
                               "Inspect the changes and decide how to restore only unwanted work.")
+    if (Path(workdir) / ".playwright-mcp").exists():
+        out["browser_files"] = ("agy's browser tool left a .playwright-mcp/ folder here. The change check ignores it. "
+                                "Delete it or add it to .gitignore before `git add -A`.")
     if status == "TIMED OUT" and conv:
         out["note"] = f"Stopped at the {minutes}-minute limit; call again with resume='{conv}' to continue."
     if status == "OK" and verify:
@@ -315,6 +338,8 @@ def delegate(args, **kwargs):
     role, resume = args.get("role") or "do", (args.get("resume") or "").strip()
     if not task or role not in ROLES:
         return json.dumps({"error": "task is required and role must be one of " + ", ".join(ROLES)})
+    if resume and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", resume):  # it goes onto agy's command line
+        return json.dumps({"error": "resume must be a conversation id returned by an earlier run"})
     why = _refuse(workdir)
     if why:
         return json.dumps({"error": "REFUSED: " + why})
@@ -322,7 +347,7 @@ def delegate(args, **kwargs):
         minutes = min(30, max(1, int(args.get("minutes") or 10)))
     except (TypeError, ValueError, OverflowError):
         return json.dumps({"error": "minutes must be an integer"})
-    verify = args.get("verify", True)
+    verify = args.get("verify") is not False  # models send null for options they skip; only an explicit false skips verifying
     if not args.get("background"):
         return json.dumps(_work(task, workdir, role, minutes, verify, resume))
     jid = os.urandom(6).hex()
@@ -360,13 +385,8 @@ def stats(args, **kwargs):
             continue  # a half-written line must not break stats
         if isinstance(r, dict):
             rows.append(r)
-    by = {}
-    for r in rows:
-        by[r.get("status", "?")] = by.get(r.get("status", "?"), 0) + 1
-    fails = {}
-    for r in rows:
-        if r.get("fail"):
-            fails[r["fail"]] = fails.get(r["fail"], 0) + 1
+    by = Counter(r.get("status", "?") for r in rows)
+    fails = Counter(r["fail"] for r in rows if r.get("fail"))
     avg = round(sum(r.get("secs", 0) for r in rows) / len(rows)) if rows else 0
     return json.dumps({"runs": len(rows), "by_status": by, "failed_by_reason": fails, "avg_seconds": avg,
                        "quota_cooldown_until": {m: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) for m, t in _cooling().items()},
@@ -384,9 +404,11 @@ def _approval(tool_name="", args=None, **kwargs):
     digest = hashlib.sha256(task.encode("utf-8", "replace")).hexdigest()[:12]
     # Short fields first: Hermes' CLI panel cuts a long description from the bottom, so the task goes last
     # and its length + hash show whether the whole task was visible.
+    reach = ("do mode skips agy's permission prompts: agy can run shell commands and change files outside workdir"
+             if role == "do" else "agy's read-only rules are not a sandbox: it can still read files outside workdir")
     return {"action": "approve", "rule_key": "gogogoogle:" + os.urandom(16).hex(), "message":
-            f"agy {role} in {workdir}; background={bool(args.get('background'))}; verify={args.get('verify', True)}; "
-            f"resume={resume or 'none'}. agy can reach files outside workdir and sends data to Google. "
+            f"agy {role} in {workdir}; background={bool(args.get('background'))}; verify={args.get('verify') is not False}; "
+            f"resume={resume or 'none'}. {reach}; data goes to Google. "
             f"Task ({len(task)} chars, sha256 {digest}):\n{task}"}
 
 
@@ -396,7 +418,9 @@ def register(ctx):
         worker = ctx.get_config("worker_model", WORKER)
         verifiers = ctx.get_config("verifier_models", VERIFIERS)
         roots = ctx.get_config("blocked_roots", [str(p) for p in BLOCKED])
-        if not isinstance(worker, str) or not worker.strip() or not isinstance(verifiers, list) or not verifiers or not all(isinstance(v, str) and v.strip() for v in verifiers) or not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots):
+        if (not isinstance(worker, str) or not worker.strip()
+                or not isinstance(verifiers, list) or not verifiers or not all(isinstance(v, str) and v.strip() for v in verifiers)
+                or not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots)):
             raise ValueError("Invalid gogogoogle plugin settings")
         WORKER, VERIFIERS, BLOCKED = worker.strip(), [v.strip() for v in verifiers], [Path(r).expanduser().resolve() for r in roots]
     ctx.register_hook("pre_tool_call", _approval)
