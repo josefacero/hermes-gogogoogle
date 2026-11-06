@@ -36,7 +36,7 @@ ROLES = {
 # Why a run failed, so a dead model, empty quota or busy service moves to the next model but a real error does not.
 FAIL_KINDS = [("quota", re.compile(r"quota|rate.?limit|exhausted|\b429\b", re.I)),
               ("model", re.compile(r"(?:unknown|invalid|unsupported) model|model[^\n]{0,60}not found|not found[^\n]{0,60}model", re.I)),
-              ("auth", re.compile(r"auth|sign.?in|login|\b401\b|\b403\b", re.I)),
+              ("auth", re.compile(r"\bauth(?:enticat\w*|ori[sz]\w*)?\b|unauthori[sz]ed|sign.?in|login|\b401\b|\b403\b", re.I)),
               ("busy", re.compile(r"\b503\b|unavailable|overloaded", re.I))]
 
 DELEGATE = {

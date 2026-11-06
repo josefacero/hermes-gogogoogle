@@ -426,6 +426,9 @@ class PluginTests(unittest.TestCase):
         kind = lambda t: next((k for k, rx in plugin.FAIL_KINDS if rx.search(t)), "other")
         self.assertEqual([kind(t) for t in ("HTTP 429 too many", "HTTP 403 Forbidden", "HTTP 401", "id 14290 done", "port 14010 closed", "file 40312.txt")],
                          ["quota", "auth", "auth", "other", "other", "other"])
+        self.assertEqual([kind(t) for t in ("Authentication failed", "token unauthorized", "Not authorised", "auth required",
+                                            "see the author's file", "authoritative source missing")],
+                         ["auth", "auth", "auth", "auth", "other", "other"])
 
 
 if __name__ == "__main__":
