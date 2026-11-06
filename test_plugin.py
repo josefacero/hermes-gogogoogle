@@ -87,51 +87,21 @@ class PluginTests(unittest.TestCase):
         for workdir in ("", "  ", None):
             self.assertTrue(plugin._refuse(workdir))
 
+    def test_numbered_research_coverage_is_only_a_tag_check(self):
+        task = "1. First source\n2. Second source\n3. Third source"
+        report = "1. DONE: checked\n2. UNVERIFIED: blocked"
+        result = plugin._item_check(task, report)
+        self.assertEqual(result["numbered_items"], 3)
+        self.assertEqual(result["missing_status_tags"], [3])
+        self.assertIn("do not prove", result["note"])
+        self.assertIsNone(plugin._item_check("1. Single item", report))
+
     def test_delegate_rejects_invalid_inputs(self):
         for args in (None, {"task": 1, "workdir": "."}, {"task": "test", "workdir": 1},
                      {"task": "test", "workdir": ".", "resume": 1},
                      {"task": "test", "workdir": ".", "minutes": "bad"}):
             with self.subTest(args=args):
                 self.assertIn("error", json.loads(plugin.delegate(args)))
-
-    def test_jev_is_off_by_default_and_never_replaces_verifier(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", return_value="same"), \
-             patch.object(plugin, "_agy", return_value=("OK", "public report", "", "c", {})), \
-             patch.object(plugin, "_git", return_value=""), patch.object(plugin, "_log"), \
-             patch.object(plugin, "_jev_public", return_value="Jev advisory flags: guessed") as jev, \
-             patch.object(plugin, "_verify", return_value="VERIFY PASS") as verify:
-            plugin._work("task", d, "research", 1, True, "")
-            jev.assert_not_called()
-            verify.assert_called_once()
-
-    def test_jev_missing_key_fails_open(self):
-        with patch.dict(plugin.os.environ, {}, clear=True), patch.object(plugin.urllib.request, "urlopen") as send:
-            self.assertIn("unavailable", plugin._jev_public("public"))
-            send.assert_not_called()
-
-    def test_jev_only_sends_report_and_returns_flags(self):
-        class Response:
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                return False
-            def read(self):
-                return b'{"answers":{"guessed":{"noul":0.8},"unproven":{"noul":0.1}}}'
-        with patch.dict(plugin.os.environ, {"JEV_API_KEY": "test-key"}), \
-             patch.object(plugin.urllib.request, "urlopen", return_value=Response()) as send:
-            self.assertIn("guessed", plugin._jev_public("public report"))
-            request = send.call_args.args[0]
-            self.assertEqual(json.loads(request.data)["state"], "public report")
-
-    def test_jev_requires_explicit_approval_and_excerpt(self):
-        with patch.object(plugin, "_jev_public", return_value="Jev advisory flags: none") as jev:
-            for args in ({"public_text": "public", "user_approved": False},
-                         {"public_text": "", "user_approved": True},
-                         {"public_text": "x" * 12001, "user_approved": True}):
-                self.assertIn("error", json.loads(plugin.jev_public_check(args)))
-            jev.assert_not_called()
-            self.assertIn("disabled", json.loads(plugin.jev_public_check({"public_text": "public", "user_approved": True}))["error"])
-            jev.assert_not_called()
 
     def test_approval_contains_exact_task_and_directory(self):
         args = {"task": "change only x", "workdir": "project", "background": True}
@@ -141,6 +111,43 @@ class PluginTests(unittest.TestCase):
         for text in (args["task"], args["workdir"], "background=True"):
             self.assertIn(text, directive["message"])
         self.assertIsNone(plugin._approval("antigravity_stats", args))
+
+    def test_approval_puts_task_last_with_length_and_hash(self):
+        task = "  " + "y" * 900 + "\n"
+        message = plugin._approval("antigravity_delegate", {"task": task, "workdir": "proj"})["message"]
+        sent = task.strip()
+        self.assertTrue(message.endswith(sent))
+        self.assertIn(f"Task ({len(sent)} chars, sha256 {plugin.hashlib.sha256(sent.encode()).hexdigest()[:12]})", message)
+        self.assertLess(message.index("proj"), message.index("Task ("))
+
+    def test_read_only_violation_never_passes(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", side_effect=["before", "after", "after"]), \
+             patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})), \
+             patch.object(plugin, "_git", return_value=""), patch.object(plugin, "_log"), \
+             patch.object(plugin, "_verify", return_value="VERIFY PASS (m)\nlooks fine"):
+            result = plugin._work("look", d, "review", 1, True, "")
+            self.assertIn("READ-ONLY VIOLATION", result["warning"])
+            self.assertTrue(result["verify"].startswith("VERIFY FAIL"))
+
+    def test_hard_timeout_keeps_streamed_conversation_id(self):
+        class Proc:
+            calls = 0
+            def communicate(self, *args, **kwargs):
+                Proc.calls += 1
+                if Proc.calls == 1:
+                    raise plugin.subprocess.TimeoutExpired("agy", 1)
+                return ('{"event":"init","conversation_id":"conv-123"}\n', "")
+            def kill(self):
+                pass
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            status, _, _, conv, _ = plugin._agy("task", ".", "model", 1)
+        self.assertEqual((status, conv), ("TIMED OUT", "conv-123"))
+
+    def test_stats_skips_broken_log_lines(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)):
+            (Path(d) / "runs.jsonl").write_text('{"status":"OK","secs":4}\n{"status":"OK"\n[]\n', encoding="utf-8")
+            result = json.loads(plugin.stats({}))
+            self.assertEqual((result["runs"], result["avg_seconds"]), (1, 4))
 
     def test_register_exposes_approval_hook(self):
         class Context:
@@ -198,6 +205,26 @@ class PluginTests(unittest.TestCase):
                 return ('{"event":"result","result":{"status":"SUCCESS","response":"","denied_actions":["command"]}}', "")
         with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
             self.assertEqual(plugin._agy("task", ".", "model", 1)[0], "FAILED")
+
+    def test_permission_error_steps_are_reported(self):
+        # Shape captured from agy 1.5.1: the denial is an ERROR step; the result still says SUCCESS.
+        stream = "\n".join(json.dumps(e) for e in (
+            {"event": "init", "conversation_id": "c1"},
+            {"event": "step_update", "step_update": {"state": "ERROR", "step_type": "tool", "tool_name": "write_file",
+             "tool_info": {"name": "write_file", "error": {"type": "TOOL_ERROR", "message":
+             "permission check failed for write_file \"x\": Permission denied for write_file(x). Matches user-configured deny rule."}}}},
+            {"event": "step_update", "step_update": {"state": "ERROR", "step_type": "tool", "tool_name": "read_file",
+             "tool_info": {"error": {"type": "TOOL_ERROR", "message": "file does not exist"}}}},
+            {"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": "could not write"}}))
+        class Proc:
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return (stream, "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            status, text, _, conv, _ = plugin._agy("task", ".", "model", 1)
+        self.assertEqual((status, conv), ("OK", "c1"))
+        self.assertTrue(text.startswith("could not write"))
+        self.assertIn("blocked: write_file.", text)
 
     def test_missing_executable_is_reported(self):
         with patch.object(plugin.shutil, "which", return_value="agy"), \
