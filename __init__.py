@@ -26,7 +26,7 @@ ROLES = {
                  "claim with a URL or file and line. Distinguish observed facts from inference. Copy dates and numbers "
                  "from sources opened in this run. Put claims without evidence and inaccessible sources in Unverified; "
                  "never present snippets or old notes as independently verified. The lead must check sources before acting. "
-                 "Fetch pages with read_url_content or search_web; use the browser only when a page needs it. "
+                 "Fetch pages with read_url_content or search_web. Do not use browser or Playwright tools: read-only runs are not given permission for them, so list a page that cannot be read without a browser under Unverified. "
                  "Public X status URL: try https://api.fxtwitter.com/status/<id> "
                  "if direct access fails; it is a third-party service and is not guaranteed. For public Instagram or TikTok "
                  "posts, use public pages when available; say if access fails. "

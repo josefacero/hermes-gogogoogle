@@ -564,6 +564,7 @@ class PluginTests(unittest.TestCase):
 
     def test_research_prompt_tells_agy_not_to_bypass_a_denied_tool(self):
         self.assertIn("do not bypass the denial", plugin.ROLES["research"])
+        self.assertIn("Do not use browser or Playwright tools", plugin.ROLES["research"])
         self.assertNotIn("mcp(", json.dumps(plugin.ROLES))
 
 
