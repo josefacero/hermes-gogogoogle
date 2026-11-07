@@ -101,6 +101,23 @@ class PluginTests(unittest.TestCase):
                 worker_release.set()
                 verifier_release.set()
 
+    def test_background_thread_keeps_the_request_profile(self):
+        # Hermes picks the active profile from a ContextVar. A plain thread loses it, so a job started in a second profile
+        # wrote its progress and result to the default profile's folder and the poll stayed at STARTING for ever.
+        import contextvars
+        profile = contextvars.ContextVar("profile", default="default")
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", side_effect=lambda: Path(d) / profile.get()),              patch.object(plugin, "_refuse", return_value=""), patch.object(plugin, "_work", return_value={"status": "OK", "result": "x"}):
+            profile.set("second")
+            jid = json.loads(plugin.delegate({"task": "t", "workdir": d, "role": "research", "background": True}))["job"]
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                done = json.loads(plugin.job({"id": jid}))
+                if done.get("job_status") == "DONE":
+                    break
+                time.sleep(.01)
+            self.assertEqual(done.get("phase"), "DONE")
+            self.assertFalse((Path(d) / "default" / "jobs" / f"{jid}.json").exists())
+
     def test_background_thread_start_failure_does_not_leave_running_job(self):
         with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)), \
              patch.object(plugin, "_refuse", return_value=""), \

@@ -1,4 +1,5 @@
 """gogogoogle: delegate bulk work to Antigravity (`agy`), verify it with a fresh model, log every run."""
+import contextvars
 import hashlib
 import json
 import os
@@ -501,7 +502,8 @@ def delegate(args, **kwargs):
         finally:
             _JOB_STARTS.pop(jid, None)
     try:
-        threading.Thread(target=run, daemon=True).start()
+        # Run inside this call's context: Hermes keeps the active profile in a ContextVar, and a bare thread falls back to the default profile.
+        threading.Thread(target=contextvars.copy_context().run, args=(run,), daemon=True).start()
     except Exception as e:
         total = round(time.monotonic() - _JOB_STARTS.pop(jid))
         _jwrite(jid, {"status": "FAILED", "job_status": "DONE", "phase": "DONE", "started": started,
