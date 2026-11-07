@@ -567,6 +567,23 @@ class PluginTests(unittest.TestCase):
         self.assertIn("Do not use browser or Playwright tools", plugin.ROLES["research"])
         self.assertNotIn("mcp(", json.dumps(plugin.ROLES))
 
+    def test_job_file_locked_for_a_moment_is_retried(self):
+        real_replace, real_read, calls = plugin.os.replace, Path.read_text, {"replace": 0, "read": 0}
+        def replace(a, b):
+            calls["replace"] += 1
+            if calls["replace"] < 3:
+                raise PermissionError(13, "locked")
+            return real_replace(a, b)
+        def read(self, *a, **k):
+            calls["read"] += 1
+            if calls["read"] < 3:
+                raise PermissionError(13, "locked")
+            return real_read(self, *a, **k)
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)),              patch.object(plugin.os, "replace", side_effect=replace), patch.object(Path, "read_text", read):
+            plugin._jwrite("0123456789ab", {"status": "DONE"})
+            self.assertEqual(json.loads(plugin.job({"id": "0123456789ab"}))["status"], "DONE")
+        self.assertEqual((calls["replace"], calls["read"]), (3, 3))
+
 
 if __name__ == "__main__":
     unittest.main()

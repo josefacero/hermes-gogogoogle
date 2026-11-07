@@ -345,12 +345,23 @@ def _jpath(jid):
     return _home() / "jobs" / f"{jid}.json"
 
 
+def _retry_locked(fn):
+    """Windows refuses to replace or open a file the other side has open for a moment; retry briefly."""
+    for i in range(40):
+        try:
+            return fn()
+        except PermissionError:
+            if i == 39:
+                raise
+            time.sleep(0.05)
+
+
 def _jwrite(jid, data):
     p = _jpath(jid)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data), encoding="utf-8")
-    os.replace(tmp, p)  # atomic, so a poll never reads half a file
+    _retry_locked(lambda: os.replace(tmp, p))  # atomic, so a poll never reads half a file
 
 
 def delegate(args, **kwargs):
@@ -412,7 +423,7 @@ def job(args, **kwargs):
         started_at = _JOB_STARTS.get(jid)
         if not p.exists():
             return json.dumps({"error": "no such job"})
-        record = json.loads(p.read_text(encoding="utf-8"))
+        record = json.loads(_retry_locked(lambda: p.read_text(encoding="utf-8")))
         if record.get("status") == "RUNNING" and record.get("process") != PROCESS_ID:
             return json.dumps({"status": "UNKNOWN", "note": "The process that started this job is not this plugin process; inspect the working folder."})
         if record.get("status") == "RUNNING" and "phase" in record and started_at is None:
