@@ -12,7 +12,15 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 
+REAL_MCP_SERVERS = plugin._mcp_servers
+
+
 class PluginTests(unittest.TestCase):
+    def setUp(self):  # never run the real `agy mcp list` in a test; the listing has its own tests below
+        patcher = patch.object(plugin, "_mcp_servers", return_value=["playwright"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_verifier_receives_bounded_full_reply_and_denial_is_incomplete(self):
         answer = "é" * 7000 + "END-SENTINEL"
         with patch.object(plugin, "_cooling", return_value={}), \
@@ -282,7 +290,104 @@ class PluginTests(unittest.TestCase):
                 plugin._agy("task", ".", "model", 1, allow_edits=allow)
                 argv = spawn.call_args.args[0]
                 self.assertEqual("--dangerously-skip-permissions" in argv, allow)
-                self.assertEqual(spawn.call_args.kwargs["env"], plugin._child_env())
+                self.assertEqual(spawn.call_args.kwargs["env"], plugin._child_env(browser=True))
+
+    def test_read_only_rules_deny_other_mcp_servers_and_unsafe_browser_tools(self):
+        with patch.object(plugin, "BROWSER_MODE", "headless"):
+            for servers, expect_in, expect_out in (
+                    (["playwright", "github", "brave-search"], ["mcp(github/*)", "mcp(brave-search/*)", "mcp(playwright/browser_evaluate)",
+                                                                "mcp(playwright/browser_run_code_unsafe)"], ["mcp(*)", "mcp(playwright/*)"]),
+                    (["github"], ["mcp(github/*)"], ["mcp(*)", "mcp(playwright/browser_evaluate)"]),
+                    ([], [], ["mcp(*)"]),
+                    (None, ["mcp(*)"], [])):
+                with self.subTest(servers=servers), patch.object(plugin, "_mcp_servers", return_value=servers):
+                    perms = plugin._read_only_permissions(".")
+                    rules = perms["deny"]
+                    self.assertEqual(rules[:3], ["write_file(*)", "edit_file(*)", "command(*)"])
+                    self.assertTrue(perms["allow"][0].startswith("read_file("))
+                    # a safe browser tool needs an explicit allow (no rule = denied headless); an unsafe one is never allowed
+                    self.assertEqual("mcp(playwright/browser_close)" in perms["allow"], servers is not None and "playwright" in servers)
+                    self.assertFalse(set(perms["allow"]) & set(rules))
+                    for r in expect_in:
+                        self.assertIn(r, rules)
+                    for r in expect_out:
+                        self.assertNotIn(r, rules)
+        with patch.object(plugin, "BROWSER_MODE", "off"), patch.object(plugin, "_mcp_servers", return_value=["playwright"]):
+            perms = plugin._read_only_permissions(".")
+            self.assertIn("mcp(*)", perms["deny"])  # off: no MCP at all for read-only roles
+            self.assertEqual(len(perms["allow"]), 1)
+
+    def test_mcp_server_listing_is_parsed_or_refused(self):
+        table = "NAME            TYPE   COMMAND\nplaywright      stdio  npx -y @playwright/mcp\ngithub          stdio  npx\n"
+        def listing(out, code=0):
+            plugin._MCP_SERVERS.clear()
+            with patch.object(plugin.shutil, "which", return_value="agy"), \
+                 patch.object(plugin.subprocess, "run") as run:
+                run.return_value.stdout, run.return_value.returncode = out, code
+                return REAL_MCP_SERVERS()
+        self.assertEqual(listing(table), ["playwright", "github"])
+        self.assertIsNone(listing("Error: no config\n"))  # no NAME header
+        self.assertIsNone(listing(table, 1))  # non-zero exit
+        self.assertIsNone(listing("NAME TYPE\nbad;name stdio\n"))  # a name we would not trust inside a rule
+        plugin._MCP_SERVERS.clear()
+        with patch.object(plugin.shutil, "which", return_value=None):
+            self.assertIsNone(REAL_MCP_SERVERS())
+        plugin._MCP_SERVERS.clear()
+
+    def test_browser_environment_modes(self):
+        for mode, headless in (("headless", True), ("visible", False)):
+            with self.subTest(mode=mode), patch.object(plugin, "BROWSER_MODE", mode):
+                env = plugin._child_env(browser=True)
+                self.assertEqual(env.get("PLAYWRIGHT_MCP_HEADLESS") == "1", headless)
+                self.assertEqual(env["PLAYWRIGHT_MCP_ISOLATED"], "1")
+                self.assertTrue(env["PLAYWRIGHT_MCP_OUTPUT_DIR"].endswith("gogogoogle-browser"))
+                self.assertFalse({k for k in plugin._child_env() if k.startswith("PLAYWRIGHT_")})  # git gets none of it
+        with patch.object(plugin, "BROWSER_MODE", "off"):
+            self.assertFalse({k for k in plugin._child_env(browser=True) if k.startswith("PLAYWRIGHT_")})
+
+    def test_credential_folders_are_always_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d).resolve()
+            (home / ".ssh" / "keys").mkdir(parents=True)
+            (home / "project").mkdir()
+            with patch.object(plugin.Path, "home", return_value=home), patch.object(plugin, "BLOCKED", []):
+                for workdir in (home / ".ssh", home / ".ssh" / "keys"):
+                    self.assertIn("credential folder", plugin._refuse(str(workdir)))
+                self.assertEqual(plugin._refuse(str(home / "project")), "")
+
+    def test_browser_mode_setting_is_validated_and_changes_the_research_prompt(self):
+        class Context:
+            def __init__(self, mode):
+                self.mode = mode
+            def get_config(self, key, default):
+                return {"browser_mode": self.mode}.get(key, default)
+            def register_hook(self, *args):
+                pass
+            def register_tool(self, **kwargs):
+                pass
+        with patch.object(plugin, "BROWSER_MODE", "headless"):
+            plugin.register(Context("off"))
+            self.assertEqual(plugin.BROWSER_MODE, "off")
+            self.assertIn("Do not use browser or Playwright tools", plugin._role_prompt("research"))
+            plugin.register(Context("visible"))
+            self.assertIn("browser_navigate", plugin._role_prompt("research"))
+            self.assertNotIn("Do not use browser", plugin._role_prompt("research"))
+            self.assertEqual(plugin._role_prompt("review"), plugin.ROLES["review"])
+            for bad in ("hidden", 1, None):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    plugin.register(Context(bad))
+
+    def test_item_tags_at_either_end_of_the_item_line_count(self):
+        task = "GOAL\n1. a\n2. b\n3. c\n"
+        for report in ("1. **Item 1: a (DONE)**\n2. **Item 2: b (DONE)**\n3. **Item 3: c (UNVERIFIED)**",
+                       "- **Item 1 (DONE):** a\n- **Item 2 (DONE):** b\n- **Item 3 (MISSING):** c",
+                       "### 1. a - DONE\n### 2. b - DONE\n### 3. c - MISSING",
+                       "### 1. a\nStatus: DONE\n\n### 2. b\nStatus: MISSING\n### 3. c\nStatus: UNVERIFIED",
+                       "1. [DONE] a\n2. [MISSING] b\n3. [UNVERIFIED] c"):
+            with self.subTest(report=report[:24]):
+                self.assertEqual(plugin._item_check(task, report)["missing_status_tags"], [])
+        self.assertEqual(plugin._item_check(task, "1. a (DONE)\n2. b was done well\n3. c is finished")["missing_status_tags"], [2, 3])
+        self.assertEqual(plugin._item_check(task, "### 1. a\n### 2. b\nStatus: DONE\n### 3. c\nStatus: DONE")["missing_status_tags"], [1])  # no borrowing
 
     def test_git_gets_minimal_environment(self):
         with patch.object(plugin.subprocess, "run") as run:
@@ -358,6 +463,28 @@ class PluginTests(unittest.TestCase):
         self.assertEqual((status, conv), ("OK", "c1"))
         self.assertTrue(text.startswith("could not write"))
         self.assertIn("blocked: write_file.", text)
+
+    def test_denied_mcp_tool_is_named_and_verifier_is_told_what_it_may_use(self):
+        stream = "\n".join(json.dumps(e) for e in (
+            {"event": "step_update", "step_update": {"state": "ERROR", "step_type": "tool", "tool_name": "call_mcp_tool",
+             "tool_info": {"parameters": {"ServerName": "playwright", "ToolName": "browser_evaluate", "Arguments": {}},
+                           "error": {"message": "permission check failed: Permission denied for mcp(playwright/browser_evaluate)."}}}},
+            {"event": "result", "result": {"status": "SUCCESS", "response": "partial"}}))
+        class Proc:
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return (stream, "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            self.assertIn("blocked: playwright/browser_evaluate.", plugin._agy("task", ".", "model", 1)[1])
+        with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "BROWSER_MODE", "headless"), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\nok", "", "", {})) as agy:
+            plugin._verify("task", "reply", ".")
+            self.assertIn("browser_navigate", agy.call_args.args[0])
+            self.assertIn("do not retry it", agy.call_args.args[0])
+        with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "BROWSER_MODE", "off"), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\nok", "", "", {})) as agy:
+            plugin._verify("task", "reply", ".")
+            self.assertNotIn("browser_navigate", agy.call_args.args[0])
 
     def test_agy_review_fixes(self):
         # Leading blank line before a valid verdict still counts.
@@ -564,7 +691,8 @@ class PluginTests(unittest.TestCase):
 
     def test_research_prompt_tells_agy_not_to_bypass_a_denied_tool(self):
         self.assertIn("do not bypass the denial", plugin.ROLES["research"])
-        self.assertIn("Do not use browser or Playwright tools", plugin.ROLES["research"])
+        self.assertIn("browser_navigate", plugin.ROLES["research"])  # the default mode lets read-only runs browse
+        self.assertIn("denied", plugin.ROLES["research"])
         self.assertNotIn("mcp(", json.dumps(plugin.ROLES))
 
     def test_job_file_locked_for_a_moment_is_retried(self):

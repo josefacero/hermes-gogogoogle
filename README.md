@@ -10,7 +10,7 @@ Name the plugin in your request: "Use gogogoogle to review the changes in this r
 
 - `antigravity_delegate(task, workdir, role, minutes, verify, background, resume)` - roles `do`, `research`, `review`.
   - **Verify** (default on): a new agy conversation receives up to 32,000 characters of the reply and 6,000 characters of Git diff. Sending the text does not prove the model checked every claim. The model family can match the worker. `VERIFY LIMITED` or `VERIFY INCOMPLETE` means manual review is needed; untracked and ignored file contents are not in the diff. If a verifier model is gone, out of quota, unauthorised or the service answers 503, the next one in the chain runs.
-  - **Git safety net:** the plugin fingerprints the working tree before and after. The reply says whether files changed. If a `research` or `review` run changed anything, it returns a `READ-ONLY VIOLATION` warning and the verdict becomes `VERIFY FAIL`, instead of trusting the prompt. agy's browser tool can leave a `.playwright-mcp/` folder in `workdir`; the check ignores it and the result tells you to delete it or add it to `.gitignore`. A folder that is not a git repo is flagged as untracked.
+  - **Git safety net:** the plugin fingerprints the working tree before and after. The reply says whether files changed. If a `research` or `review` run changed anything, it returns a `READ-ONLY VIOLATION` warning and the verdict becomes `VERIFY FAIL`, instead of trusting the prompt. The plugin points agy's browser snapshots at a temp folder; if an older setup still leaves a `.playwright-mcp/` folder in `workdir`, the check ignores it and the result tells you to delete it or add it to `.gitignore`. A folder that is not a git repo is flagged as untracked.
   - **Background:** `background=true` returns a job id at once; poll with `antigravity_job` for the plugin-observed worker or verifier phase and elapsed time. It does not notify the chat automatically. A completed run includes `total_seconds`; the older `seconds` and stats average measure the worker phase, not total time.
   - **Resume:** a timed-out run returns its conversation id when agy reported one; pass it as `resume` to continue. On Windows a timeout also stops agy's child processes (browser, shell).
 - `antigravity_job(id)` - status or full result of a background run.
@@ -25,9 +25,10 @@ Token counters cover worker usage reported by agy; they do not measure verifier 
 ## Safety controls
 
 - **You approve every run.** Hermes shows the role, workdir and task and waits for your answer. Deny stops it before agy starts.
-- **`research` and `review` are the cautious roles.** They run agy without `--dangerously-skip-permissions` and ask it to deny edits and shell commands.
+- **`research` and `review` are the cautious roles.** They run agy without `--dangerously-skip-permissions` and pass session-only rules that deny edits, shell commands, every MCP server in your agy config except `playwright`, and the Playwright tools that run code, type or upload files (`browser_run_code_unsafe`, `browser_evaluate`, `browser_file_upload`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_drag`, `browser_drop`, `browser_select_option`, `browser_handle_dialog`). The verifier gets the same rules. These are rules, not a sandbox.
 - **`--dangerously-skip-permissions` is used only by `do`.** In a `do` run agy approves its own file edits and shell commands without asking, so it can change or delete files in `workdir`. It is picked per request, after your Hermes approval, and there is no setting that turns it off for `do`; choose `research` or `review` when you do not want it. Keep the work in a git repo with a clean tree so git is the undo.
-- **Tasks that need agy's browser or other tools work best in `do`.** Headless agy denies any tool that is not pre-approved, because nobody can answer its prompt. `research` and `review` pre-approve only reading `workdir`, so a task that needs another tool (for example agy's Playwright browser) can be denied and return no answer; the research prompt steers agy to web search and page-reading tools instead. `do` skips agy's permission checks, so such tools are only expected to work there (not yet tested for browser tasks), and `do` can also edit files and run commands. Use it only for work you would let agy do unattended.
+- **The browser (agy's Playwright server) is on for `research`, `review` and the verifier, headless by default.** Tested on agy 1.5.2 (Windows, a few runs): pages open with no window, and the browser's snapshot files go to a temp folder instead of `workdir`. The plugin also asks for an in-memory browser profile with no saved logins (`PLAYWRIGHT_MCP_ISOLATED=1`); that the profile really stays empty was not checked. Safe browser tools (navigate, snapshot, screenshot, click, tabs and similar) get explicit allow rules, because agy's headless mode refuses an MCP tool that has no rule and then often ends the run with no reply. Set `browser_mode` to `visible` to watch it (a screen recording, say) or `off` to give the read-only roles no MCP tools at all. Tools you have not listed as unsafe stay allowed, so a Playwright release that adds a tool can add a capability until the list is updated. Some sites block headless browsers; the run then lists those pages under Unverified. Page text is untrusted: a page can contain instructions aimed at the agent, which is why code-running and typing tools are denied.
+- **`do` skips agy's permission checks,** so it can use any MCP tool, edit files and run commands. Use it only for work you would let agy do unattended.
 - **Keep folders off limits with `blocked_roots`.** A request whose `workdir` is inside or contains a listed folder is refused, and a drive root or your home folder is always refused. In your Hermes `config.yaml`:
 
   ```yaml
@@ -40,7 +41,14 @@ Token counters cover worker usage reported by agy; they do not measure verifier 
             - /home/me/clients
   ```
 
-  The `GOGOGOOGLE_BLOCKED_ROOTS` environment variable (path-separator list) works as a fallback. This only stops the plugin from starting in those folders. It does not stop agy from reading a file by absolute path, so use OS permissions or a separate user for a hard boundary.
+  The `GOGOGOOGLE_BLOCKED_ROOTS` environment variable (path-separator list) works as a fallback. Credential folders in your home folder (`.ssh`, `.aws`, `.gnupg`, `.azure`, `.kube`, `.docker`, `.config/gcloud`, `.gemini`) are always refused, with or without this setting. This only stops the plugin from starting in those folders. It does not stop agy from reading a file by absolute path, so use OS permissions or a separate user for a hard boundary.
+
+## Going faster (your risk)
+
+- **Start long jobs with `background=true`** and poll with `antigravity_job`; one job per independent question.
+- **Skip the verifier on mechanical work** (`verify=false`) such as renames or file generation you will diff yourself. Keep it on for research you will act on.
+- **Keep tasks short and numbered** (3 to 8 items). Dropped items, not length, are the usual failure.
+- **`do` already uses `--dangerously-skip-permissions`** after your Hermes approval, which is what lets it edit and run commands without stopping. The plugin does not add it to the read-only roles and has no setting for that: use `do` for work you would let agy do unattended, in a git repo with a clean tree, and keep personal and client folders in `blocked_roots`. Blocked folders stay refused even for `do`, but agy can still read other paths by absolute path.
 
 ## Why not just switch the model or spawn a subagent?
 
@@ -54,22 +62,25 @@ If you already have a Gemini API key and only want another model, Hermes delegat
 
 ## Disclosures
 
-- **Runs shell commands:** `do` launches `agy` with `--dangerously-skip-permissions` after the Hermes approval gate; `research`, `review`, and verifier passes omit the flag and request session-only rules to allow project reads and deny edits and shell commands. Enforcement depends on agy's settings and version; these rules are not an OS sandbox. In testing with agy 1.5.1 the rules blocked writes and shell commands but not reads outside `workdir`. agy still reports success after a blocked action, so the plugin appends a note listing the blocked tools to the result. The read-only roles grant no MCP tool permissions, so a research task that needs one of agy's own MCP tools (for example its Playwright browser) can be denied and return no answer; the plugin does not widen that. The research prompt tells agy to use its web search and page-reading tools instead of a browser, and to stop and report a denied tool. agy can access files outside `workdir`. Git detection can miss ignored files and modifications inside existing untracked files, and does not revert changes.
+- **Runs shell commands:** `do` launches `agy` with `--dangerously-skip-permissions` after the Hermes approval gate; `research`, `review`, and verifier passes omit the flag and request session-only rules to allow project reads and deny edits and shell commands. Enforcement depends on agy's settings and version; these rules are not an OS sandbox. In testing the rules blocked writes and shell commands but not reads outside `workdir`. agy still reports success after a blocked action, so the plugin appends a note listing the blocked tools to the result. On agy 1.5.2 the read-only roles could call every MCP server in the user's agy config until the plugin added `mcp(<server>/*)` deny rules (one run each; read from `agy mcp list`; if that list cannot be read, all MCP tools are denied). agy's Playwright browser stays available to those roles except the tools listed above; its pages are fetched from the internet and from your own network (for example `localhost`) as the OS user, because no origin filter is set. agy can access files outside `workdir`. Git detection can miss ignored files and modifications inside existing untracked files, and does not revert changes.
 - **Sends data to a third party:** your task text, files agy reads and up to 32,000 characters of the worker reply plus 6,000 characters of Git diff go to the verifier through Google agy.
 - **Reads outside its own data:** agy can access files as the current OS user. The plugin refuses a drive root, your home folder and paths inside or containing a blocked root. Set roots with the `blocked_roots` plugin setting (a list of paths) or, as a fallback, the `GOGOGOOGLE_BLOCKED_ROOTS` environment variable (path-separator list). Use OS isolation for a hard boundary.
 - **Runs `git`:** `git diff`, `git status`, `git ls-files` in `workdir`. The diff (up to 6,000 characters) goes to the verifier model. agy and git receive a limited environment without inherited provider API keys, but can still access files permitted to the OS user.
 - **Writes:** `runs.jsonl` (time, role, model, status, seconds, token counts, failure class; no task text) and `jobs/<id>.json` (background results) in the plugin data directory. After a restart, a running job's status is unknown; a subprocess may still be running.
 - **No credentials stored, no telemetry, no self-update.**
 
-## Install
+## Install (a person or an AI agent can follow this)
 
-```
-hermes plugins install josefacero/hermes-gogogoogle
-hermes plugins enable gogogoogle
-```
+Run each step and check its result before the next one.
+
+1. **Antigravity CLI.** `agy --version` prints a version (tested on 1.5.2). If the command is missing, install Antigravity and run `agy` once to sign in.
+2. **Plugin.** `hermes plugins install josefacero/hermes-gogogoogle` then `hermes plugins enable gogogoogle`. Check: `hermes plugins list` shows `gogogoogle` enabled. Start a new Hermes session (restart the gateway if you use one).
+3. **Browser, optional but recommended for research.** `agy mcp list` should show a server named exactly `playwright`. If it does not, add it (flags go before the name): `agy mcp add playwright npx -y @playwright/mcp@0.0.84`. It needs Node.js (`npx`) and Google Chrome. Without it, research still works through agy's web search and page-reading tools.
+4. **Protect your folders.** Add anything private to `blocked_roots` (see below). Credential folders in your home folder are blocked already.
+5. **Try it.** Ask Hermes: "Use gogogoogle to research <a question that needs a web page>". Hermes asks you to approve; allow once. The reply should end with a verifier line (`VERIFY PASS`, `LIMITED`, `INCOMPLETE` or `SKIPPED`) and no browser window should appear.
 
 When a model reports `Resets in 106h27m`, the plugin remembers that reset time and skips the model in later verifier chains until then. `antigravity_stats` shows `quota_cooldown_until`.
 
 ## Setup
 
-Install Antigravity and sign in (`agy`). Optional plugin settings under `plugins.entries.gogogoogle.settings` are `worker_model` (string), `verifier_models` (list of strings), and `blocked_roots` (list of paths). Model names come from `agy models`. The previous environment variables remain fallback values when these settings are absent.
+Optional plugin settings under `plugins.entries.gogogoogle.settings` are `worker_model` (string), `verifier_models` (list of strings), `blocked_roots` (list of paths) and `browser_mode` (`headless` by default, `visible` or `off`). Model names come from `agy models`. The environment variables `ANTIGRAVITY_MODEL`, `ANTIGRAVITY_VERIFIER_MODELS`, `GOGOGOOGLE_BLOCKED_ROOTS` and `GOGOGOOGLE_BROWSER` remain fallback values when these settings are absent.

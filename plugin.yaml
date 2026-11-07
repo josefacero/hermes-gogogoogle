@@ -1,5 +1,5 @@
 name: gogogoogle
-version: 0.3.3
+version: 0.4.0
 description: "gogogoogle: hand bulk work to Google Antigravity (agy) as a worker, then have a fresh second model check it. Runs on your Antigravity quota, not your Hermes model's."
 author: Josef Acero
 requires_hermes: ">=0.22.0"
@@ -13,6 +13,9 @@ config_schema:
   blocked_roots:
     type: list
     description: Paths that must not be used as working directories.
+  browser_mode:
+    type: str
+    description: "How agy's browser runs for research, review and verifier passes: headless (default), visible, or off."
 provides_hooks:
   - pre_tool_call
 provides_tools:
