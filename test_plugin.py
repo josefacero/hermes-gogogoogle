@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +13,95 @@ spec.loader.exec_module(plugin)
 
 
 class PluginTests(unittest.TestCase):
+    def test_verifier_receives_bounded_full_reply_and_denial_is_incomplete(self):
+        answer = "é" * 7000 + "END-SENTINEL"
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\nchecked", "", "", {})) as agy:
+            plugin._verify("task", answer, ".")
+            self.assertIn(answer, agy.call_args.args[0])
+            plugin._verify("task", "a" * (plugin.REPLY_LIMIT + 1), ".")
+            self.assertIn("Reply cut at 32,000 characters", agy.call_args.args[0])
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\n[gogogoogle] agy permission rules blocked: read_file.", "", "", {})):
+            self.assertTrue(plugin._verify("task", "reply", ".").startswith("VERIFY INCOMPLETE"))
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: FAIL\n[gogogoogle] agy permission rules blocked: read_file.", "", "", {})):
+            self.assertTrue(plugin._verify("task", "reply", ".").startswith("VERIFY FAIL"))
+
+    def test_poll_tolerates_job_finishing_after_start_time_lookup(self):
+        jid = "abcdef123456"
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)):
+            plugin._jwrite(jid, {"status": "RUNNING", "process": plugin.PROCESS_ID, "phase": "WORKER"})
+            plugin._JOB_STARTS[jid] = time.monotonic()
+            original = Path.read_text
+            def finishes_during_read(path, *args, **kwargs):
+                data = original(path, *args, **kwargs)
+                plugin._JOB_STARTS.pop(jid, None)
+                return data
+            with patch.object(Path, "read_text", finishes_during_read):
+                result = json.loads(plugin.job({"id": jid}))
+            self.assertEqual(result["status"], "RUNNING")
+            self.assertIn("elapsed_seconds", result)
+
+    def test_truncated_reply_and_worker_denial_are_incomplete(self):
+        for reply in ("a" * (plugin.REPLY_LIMIT + 1), "done\n\n[gogogoogle] agy permission rules blocked: tool.",
+                      "[Google sign-in URL redacted; sign in through Antigravity]"):
+            with self.subTest(reply=reply[:10]), tempfile.TemporaryDirectory() as d, \
+                 patch.object(plugin, "_snap", return_value="same"), patch.object(plugin, "_git", return_value=""), \
+                 patch.object(plugin, "_log"), patch.object(plugin, "_agy", return_value=("OK", reply, "", "c", {})), \
+                 patch.object(plugin, "_verify", return_value="VERIFY PASS (m)"):
+                self.assertTrue(plugin._work("t", d, "research", 1, True, "")["verify"].startswith("VERIFY INCOMPLETE"))
+
+    def test_background_phases_and_elapsed(self):
+        worker_entered, worker_release = threading.Event(), threading.Event()
+        verifier_entered, verifier_release = threading.Event(), threading.Event()
+        def agy(*args, **kwargs):
+            worker_entered.set()
+            if not worker_release.wait(5):
+                raise RuntimeError("worker test timed out")
+            return ("OK", "done", "", "c", {})
+        def verify(*args):
+            verifier_entered.set()
+            if not verifier_release.wait(5):
+                raise RuntimeError("verifier test timed out")
+            return "VERIFY PASS (m)"
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)), \
+             patch.object(plugin, "_refuse", return_value=""), patch.object(plugin, "_snap", return_value="same"), \
+             patch.object(plugin, "_git", return_value=""), patch.object(plugin, "_log"), \
+             patch.object(plugin, "_agy", side_effect=agy), patch.object(plugin, "_verify", side_effect=verify):
+            try:
+                jid = json.loads(plugin.delegate({"task": "t", "workdir": d, "role": "research", "background": True}))["job"]
+                self.assertTrue(worker_entered.wait(5))
+                running = json.loads(plugin.job({"id": jid}))
+                self.assertEqual((running["status"], running["phase"]), ("RUNNING", "WORKER"))
+                self.assertIn("elapsed_seconds", running)
+                worker_release.set()
+                self.assertTrue(verifier_entered.wait(5))
+                self.assertEqual(json.loads(plugin.job({"id": jid}))["phase"], "VERIFYING")
+                verifier_release.set()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    done = json.loads(plugin.job({"id": jid}))
+                    if done.get("job_status") == "DONE":
+                        break
+                    time.sleep(.01)
+                self.assertEqual((done["status"], done["phase"]), ("OK", "DONE"))
+                self.assertIn("seconds", done)
+                self.assertGreaterEqual(done["total_seconds"], done["seconds"])
+                self.assertIn("started", done)
+            finally:
+                worker_release.set()
+                verifier_release.set()
+
+    def test_background_thread_start_failure_does_not_leave_running_job(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_home", return_value=Path(d)), \
+             patch.object(plugin, "_refuse", return_value=""), \
+             patch.object(plugin.threading.Thread, "start", side_effect=RuntimeError("no threads")):
+            result = json.loads(plugin.delegate({"task": "t", "workdir": d, "background": True}))
+            self.assertEqual(result["status"], "FAILED")
+            self.assertNotIn(result["job"], plugin._JOB_STARTS)
+            self.assertEqual(json.loads(plugin.job({"id": result["job"]}))["status"], "FAILED")
+
     def test_verdict_requires_single_first_line(self):
         for reply, expected in [("VERDICT: PASS\nchecked", "VERIFY PASS"),
                                 ("VERDICT: FAIL\nreason", "VERIFY FAIL"),
@@ -208,6 +299,46 @@ class PluginTests(unittest.TestCase):
         with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
             self.assertEqual(plugin._agy("task", ".", "model", 1)[0], "FAILED")
 
+    def test_authentication_url_is_not_returned_or_saved_in_result(self):
+        class Proc:
+            returncode = 1
+            def communicate(self, *args, **kwargs):
+                return ("", "Authentication required https://accounts.google.com/o/oauth2/auth?state=private-value")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            status, text, kind, _, _ = plugin._agy("task", ".", "model", 1)
+        self.assertEqual((status, kind), ("FAILED", "auth"))
+        self.assertNotIn("private-value", text)
+        self.assertIn("sign in through Antigravity", text)
+
+    def test_auth_redaction_precedes_truncation_and_covers_success_and_timeout(self):
+        secret_url = "https://accounts.google.com/o/oauth2/auth?state=" + "x" * 2500 + "ENDSECRET"
+        for escaped in (secret_url.replace("/", r"\/"), secret_url.replace(":", r"\u003a").replace(".", r"\u002e")):
+            self.assertNotIn("ENDSECRET", plugin._redact_auth(escaped))
+        class Proc:
+            returncode = 1
+            calls = 0
+            def communicate(self, *args, **kwargs):
+                return (secret_url, "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Proc()):
+            self.assertNotIn("ENDSECRET", plugin._agy("t", ".", "m", 1)[1])
+        class Success(Proc):
+            returncode = 0
+            def communicate(self, *args, **kwargs):
+                return (json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": secret_url}}), "")
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Success()):
+            self.assertNotIn("ENDSECRET", plugin._agy("t", ".", "m", 1)[1])
+        class Timeout(Proc):
+            def communicate(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise plugin.subprocess.TimeoutExpired("agy", 1)
+                return (secret_url, "")
+            def kill(self):
+                pass
+        with patch.object(plugin.shutil, "which", return_value="agy"), patch.object(plugin.subprocess, "Popen", return_value=Timeout()), \
+             patch.object(plugin, "_kill_tree"):
+            self.assertNotIn("ENDSECRET", plugin._agy("t", ".", "m", 1)[1])
+
     def test_permission_error_steps_are_reported(self):
         # Shape captured from agy 1.5.1: the denial is an ERROR step; the result still says SUCCESS.
         stream = "\n".join(json.dumps(e) for e in (
@@ -233,7 +364,8 @@ class PluginTests(unittest.TestCase):
         with patch.object(plugin, "_cooling", return_value={}), \
              patch.object(plugin, "_agy", return_value=("OK", "\nVERDICT: PASS\nok", "", "", {})) as agy:
             self.assertTrue(plugin._verify("t", "a" * 7000, ".").startswith("VERIFY PASS"))
-            self.assertIn("Reply cut at 6,000 characters", agy.call_args.args[0])
+            self.assertIn("a" * 7000, agy.call_args.args[0])
+            self.assertNotIn("Reply cut", agy.call_args.args[0])
         # A read-only violation fails even when the verifier was skipped.
         with tempfile.TemporaryDirectory() as d, patch.object(plugin, "_snap", side_effect=["b", "a", "a"]), \
              patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})), \
@@ -429,6 +561,10 @@ class PluginTests(unittest.TestCase):
         self.assertEqual([kind(t) for t in ("Authentication failed", "token unauthorized", "Not authorised", "auth required",
                                             "see the author's file", "authoritative source missing")],
                          ["auth", "auth", "auth", "auth", "other", "other"])
+
+    def test_research_prompt_tells_agy_not_to_bypass_a_denied_tool(self):
+        self.assertIn("do not bypass the denial", plugin.ROLES["research"])
+        self.assertNotIn("mcp(", json.dumps(plugin.ROLES))
 
 
 if __name__ == "__main__":
