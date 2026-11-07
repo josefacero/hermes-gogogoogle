@@ -22,6 +22,25 @@ Hermes asks for approval before each delegation through its approval system. The
 
 Token counters cover worker usage reported by agy; they do not measure verifier costs or prove a net saving.
 
+## Safety controls
+
+- **You approve every run.** Hermes shows the role, workdir and task and waits for your answer. Deny stops it before agy starts.
+- **`research` and `review` are the cautious roles.** They run agy without `--dangerously-skip-permissions` and ask it to deny edits and shell commands.
+- **`--dangerously-skip-permissions` is used only by `do`.** In a `do` run agy approves its own file edits and shell commands without asking, so it can change or delete files in `workdir`. It is picked per request, after your Hermes approval, and there is no setting that turns it off for `do`; choose `research` or `review` when you do not want it. Keep the work in a git repo with a clean tree so git is the undo.
+- **Keep folders off limits with `blocked_roots`.** A request whose `workdir` is inside or contains a listed folder is refused, and a drive root or your home folder is always refused. In your Hermes `config.yaml`:
+
+  ```yaml
+  plugins:
+    entries:
+      gogogoogle:
+        settings:
+          blocked_roots:
+            - D:/Private
+            - /home/me/clients
+  ```
+
+  The `GOGOGOOGLE_BLOCKED_ROOTS` environment variable (path-separator list) works as a fallback. This only stops the plugin from starting in those folders. It does not stop agy from reading a file by absolute path, so use OS permissions or a separate user for a hard boundary.
+
 ## Why not just switch the model or spawn a subagent?
 
 - **Your lead model keeps the judgment.** Switching Hermes to a Gemini model replaces the thing deciding what to do. Here Hermes stays on its model and sends only the bulk step out.
