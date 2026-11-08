@@ -1,6 +1,25 @@
 # gogogoogle for Hermes
 
-Hand bulk work to Google Antigravity's `agy` CLI as a worker, then have a fresh second model check the result.
+**Keep Hermes in charge. Give it an Antigravity partner.**
+
+gogogoogle lets Hermes delegate research, coding, and other tasks to Google Antigravity using your Antigravity account and quota. With Hermes approvals enabled, you approve each delegation, and an optional fresh model reviews the result before it comes back to Hermes.
+
+For example, ask Hermes to research a question, review specific files, or make an edit in a project. Hermes keeps its own model and brings the result back into your conversation. A fresh review is a second opinion, not a guarantee that the result is correct.
+
+## Get started
+
+You'll need Hermes, Git, and an installed, signed-in Antigravity CLI (`agy --version` should work). In a terminal, run:
+
+```bash
+hermes plugins install josefacero/hermes-gogogoogle
+hermes plugins enable gogogoogle
+```
+
+Start a new Hermes session, then try:
+
+> Use gogogoogle to research the WHO's physical activity recommendations for adults and cite the sources.
+
+Review the approval prompt before allowing the run. For browser setup and security details, see [Install](#install-a-person-or-an-ai-agent-can-follow-this) and [Safety controls](#safety-controls) below. Research and review can read files the current OS user can access; their rules are not an OS sandbox.
 
 ## Use it
 
