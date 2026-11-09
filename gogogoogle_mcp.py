@@ -17,6 +17,23 @@ import time
 from pathlib import Path
 
 
+class Refused(ValueError):
+    """The adapter itself refused a request. Its text is a fixed message, safe to show the calling agent."""
+
+
+class Denied(PermissionError):
+    """The adapter's policy refused a request. Fixed message, safe to show the calling agent."""
+
+
+def invoke(method, args):
+    try:
+        return method(args)
+    except (Refused, Denied) as exc:  # a bad token or a refused workspace must not look like a backend failure
+        return {"error": str(exc)}
+    except Exception:  # anything else may carry paths or backend detail, so it stays generic
+        return {"error": "Request failed; inspect the backend separately."}
+
+
 class Adapter:
     def __init__(self, backend, *, trusted=False, host=None, allowed_roots=None, allow_do=False):
         self.backend = backend
@@ -41,26 +58,26 @@ class Adapter:
 
     def _check(self):
         if not self.trusted:
-            raise PermissionError("MCP server is not explicitly trusted and configured with a host label")
+            raise Denied("MCP server is not explicitly trusted and configured with a host label")
 
     def _workspace(self, value):
         try:
             workspace = Path(value).expanduser().resolve(strict=True)
             if not workspace.is_dir():
-                raise PermissionError("workspace is not a directory")
+                raise Denied("workspace is not a directory")
             for root in self.roots:
                 if root.resolve(strict=True) == root and root.is_dir() and workspace.is_relative_to(root):
                     return workspace
         except (OSError, RuntimeError) as exc:
-            raise PermissionError("workspace or root is unavailable") from exc
-        raise PermissionError("workspace is outside configured roots")
+            raise Denied("workspace or root is unavailable") from exc
+        raise Denied("workspace is outside configured roots")
 
     def prepare(self, args):
         self._check()
         if not isinstance(args, dict) or set(args) - {"task", "workdir", "role", "minutes", "verify", "background", "resume"}:
-            raise ValueError("invalid request fields")
+            raise Refused("invalid request fields")
         if not isinstance(args.get("task"), str) or not args["task"].strip() or not isinstance(args.get("workdir"), str) or not args["workdir"].strip():
-            raise ValueError("task and workdir are required strings")
+            raise Refused("task and workdir are required strings")
         role = args.get("role", "do")
         minutes = args.get("minutes", 10)
         verify = args.get("verify", True)
@@ -69,9 +86,9 @@ class Adapter:
         if (role not in ("do", "research", "review") or type(minutes) is not int or not 1 <= minutes <= 30
                 or type(verify) is not bool or type(background) is not bool or not isinstance(resume, str)
                 or (resume and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", resume))):
-            raise ValueError("invalid delegation options")
+            raise Refused("invalid delegation options")
         if role == "do" and not self.allow_do:
-            raise PermissionError("do mode is not enabled by the operator")
+            raise Denied("do mode is not enabled by the operator")
         workspace = self._workspace(args["workdir"])
         request = {"task": args["task"].strip(), "workdir": str(workspace), "role": role,
                    "minutes": minutes, "verify": verify, "background": background, "resume": resume}
@@ -79,7 +96,7 @@ class Adapter:
         with self._lock:
             self._pending = {key: value for key, value in self._pending.items() if value[0] > now}
             if len(self._pending) >= 100:
-                raise ValueError("too many pending requests")
+                raise Refused("too many pending requests")
             token = secrets.token_urlsafe(32)
             self._pending[token] = (now + 120, request)
         return {"request": request.copy(), "host_label": self.host, "skip_permissions": role == "do",
@@ -89,13 +106,13 @@ class Adapter:
     def delegate(self, token):
         self._check()
         if not isinstance(token, str):
-            raise ValueError("invalid token")
+            raise Refused("invalid token")
         with self._lock:
             entry = self._pending.pop(token, None)
         if entry is None or entry[0] <= time.monotonic():
-            raise ValueError("invalid, expired, or already used token")
+            raise Refused("invalid, expired, or already used token")
         if self._workspace(entry[1]["workdir"]) != Path(entry[1]["workdir"]):
-            raise PermissionError("prepared workspace changed")
+            raise Denied("prepared workspace changed")
         return self.backend.delegate(entry[1])
 
     def job(self, args):
@@ -129,12 +146,6 @@ def main():
     backend.BROWSER_MODE = "off"
     adapter.backend = backend
     server = FastMCP("gogogoogle")
-
-    def invoke(method, args):
-        try:
-            return method(args)
-        except Exception:
-            return {"error": "Request failed; inspect the backend separately."}
 
     @server.tool()
     def prepare(task: str, workdir: str, role: str = "do", minutes: int = 10,

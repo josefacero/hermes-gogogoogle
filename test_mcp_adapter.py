@@ -210,6 +210,30 @@ class AdapterTests(unittest.TestCase):
     def test_import_does_not_import_mcp_sdk(self):
         self.assertFalse(any(name == "mcp" or name.startswith("mcp.") for name in sys.modules))
 
+    def test_invoke_shows_the_adapters_own_refusal_text(self):
+        token = self.adapter.prepare(self.request)["token"]
+        bad = self.module.invoke(self.adapter.delegate, token + "x")  # a mistyped token, as Codex sent it
+        self.assertEqual({"error": "invalid, expired, or already used token"}, bad)
+        self.assertEqual("delegated", self.module.invoke(self.adapter.delegate, token))  # the real token is still usable
+        self.assertEqual({"error": "invalid, expired, or already used token"}, self.module.invoke(self.adapter.delegate, token))
+        outside = self.module.invoke(self.adapter.prepare, {**self.request, "workdir": os.path.abspath(os.sep)})
+        self.assertEqual({"error": "workspace is outside configured roots"}, outside)
+        no_do = self.module.invoke(self.adapter.prepare, {**self.request, "role": "do"})
+        self.assertEqual({"error": "do mode is not enabled by the operator"}, no_do)
+
+    def test_invoke_keeps_unexpected_errors_generic(self):
+        generic = {"error": "Request failed; inspect the backend separately."}
+        secret = os.path.join(tempfile.gettempdir(), "private-name.txt")
+
+        def boom(_args):
+            raise PermissionError(13, "Access is denied", secret)  # an OS error carries the file path
+
+        def odd(_args):
+            raise ValueError("detail from the backend " + secret)
+
+        for fn in (boom, odd, lambda _args: 1 / 0):
+            self.assertEqual(generic, self.module.invoke(fn, {}))
+
 
 if __name__ == "__main__":
     unittest.main()
