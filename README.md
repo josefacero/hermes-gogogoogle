@@ -121,12 +121,13 @@ Claude Code (user scope):
 claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-laptop -e 'GOGOGOOGLE_MCP_ALLOWED_ROOTS=["/home/me/projects"]' -- python /path/to/hermes-gogogoogle/gogogoogle_mcp.py
 ```
 
-Codex (`~/.codex/config.toml`), not yet tested with a real Codex session:
+Codex (`~/.codex/config.toml`). Tested with `codex exec` and a fake `agy`, using these keys passed as `-c` overrides rather than a config file. Non-interactive `codex exec` runs with approval policy "never", so it blocks every MCP call (`MCP tool call requires approval`) unless the server also sets `default_tools_approval_mode = "approve"`. That setting auto-approves `prepare` and `delegate`, so with it Codex shows no approval prompt and the skill's "show the user the request" step is the only check:
 
 ```toml
 [mcp_servers.gogogoogle]
 command = "python"
 args = ["/path/to/hermes-gogogoogle/gogogoogle_mcp.py"]
+# default_tools_approval_mode = "approve"   # needed for `codex exec`; read the note above first
 
 [mcp_servers.gogogoogle.env]
 GOGOGOOGLE_MCP_TRUSTED = "1"
@@ -134,7 +135,7 @@ GOGOGOOGLE_MCP_HOST = "my-laptop"
 GOGOGOOGLE_MCP_ALLOWED_ROOTS = '["/home/me/projects"]'
 ```
 
-What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and a Claude Code session ran `prepare` then `delegate` against it. What has not: Codex or other hosts, a real `agy` run through this path, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
+What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and one Claude Code session and one Codex session (`codex exec`) each ran `prepare` then `delegate` against it. What has not: other hosts, an interactive Codex session, a real `agy` run through this path, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
 
 ## Setup
 
