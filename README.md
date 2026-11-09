@@ -100,6 +100,42 @@ Run each step and check its result before the next one.
 
 When a model reports `Resets in 106h27m`, the plugin remembers that reset time and skips the model in later verifier chains until then. `antigravity_stats` shows `quota_cooldown_until`.
 
+## Use from Claude Code or Codex (experimental)
+
+`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It needs the optional `mcp` Python package (`pip install mcp`); the Hermes plugin itself stays standard-library only. The skill in `skills/gogogoogle/SKILL.md` tells the agent how to use it.
+
+**The operator sets the policy, not the agent.** The server starts only with all of these environment variables, and the agent cannot change them:
+
+| Variable | Meaning |
+|---|---|
+| `GOGOGOOGLE_MCP_TRUSTED=1` | You accept that every client of this server may delegate within the policy below. |
+| `GOGOGOOGLE_MCP_HOST` | A label shown in each request (for example `my-laptop`). |
+| `GOGOGOOGLE_MCP_ALLOWED_ROOTS` | A JSON array of existing absolute folders; work outside them is refused. |
+| `GOGOGOOGLE_MCP_ALLOW_DO=1` | Optional. Without it only `research` and `review` run. With it, `do` runs agy with permission prompts skipped. |
+
+Delegating takes two calls: `prepare` returns the exact request and a single-use token (valid 2 minutes), `delegate(token)` runs it. **This is not Hermes' approval.** Hermes asks a person before each call; here the person is whoever answers the host's tool prompt, and a host set to auto-approve skips that. Browser tools for agy are off on this path.
+
+Claude Code (user scope):
+
+```bash
+claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-laptop -e 'GOGOGOOGLE_MCP_ALLOWED_ROOTS=["/home/me/projects"]' -- python /path/to/hermes-gogogoogle/gogogoogle_mcp.py
+```
+
+Codex (`~/.codex/config.toml`), not yet tested with a real Codex session:
+
+```toml
+[mcp_servers.gogogoogle]
+command = "python"
+args = ["/path/to/hermes-gogogoogle/gogogoogle_mcp.py"]
+
+[mcp_servers.gogogoogle.env]
+GOGOGOOGLE_MCP_TRUSTED = "1"
+GOGOGOOGLE_MCP_HOST = "my-laptop"
+GOGOGOOGLE_MCP_ALLOWED_ROOTS = '["/home/me/projects"]'
+```
+
+What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and a Claude Code session ran `prepare` then `delegate` against it. What has not: Codex or other hosts, a real `agy` run through this path, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
+
 ## Setup
 
 Optional plugin settings under `plugins.entries.gogogoogle.settings` are `worker_model` (string), `verifier_models` (list of strings), `blocked_roots` (list of paths) and `browser_mode` (`headless` by default, `visible` or `off`). Model names come from `agy models`. The environment variables `ANTIGRAVITY_MODEL`, `ANTIGRAVITY_VERIFIER_MODELS`, `GOGOGOOGLE_BLOCKED_ROOTS` and `GOGOGOOGLE_BROWSER` remain fallback values when these settings are absent.
