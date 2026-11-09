@@ -135,7 +135,7 @@ GOGOGOOGLE_MCP_HOST = "my-laptop"
 GOGOGOOGLE_MCP_ALLOWED_ROOTS = '["/home/me/projects"]'
 ```
 
-What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and one Claude Code session and one Codex session (`codex exec`) each ran `prepare` then `delegate` against it. What has not: other hosts, an interactive Codex session, a real `agy` run through this path, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
+What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and one Claude Code session and one Codex session (`codex exec`) each ran `prepare` then `delegate` against it. One real `agy` review (gemini-3.8-flash-high, 43 s, verify off) ran once through the Claude Code path on a 10-line file and returned plausible findings with correct line numbers. That is one run, not a quality measurement. What has not been tested: other hosts, an interactive Codex session, a real `agy` run from Codex, the `do` role and background jobs with real `agy`, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
 
 ## Setup
 
