@@ -9,8 +9,8 @@ Public repo `josefacero/hermes-gogogoogle`. Trigger word: "Use gogogoogle to ...
 
 ## Rules
 - Public repo: no secrets, no law-folder names, no private paths. Stage files by name.
-- Standard library only. Python 3.11+.
-- Check before any push: `hermes plugins validate .` and `python -m unittest test_plugin`.
+- The Hermes plugin (`__init__.py`) is standard library only. Python 3.11+. `gogogoogle_mcp.py` (the optional MCP server for Claude Code and Codex) needs the optional `mcp` package; nothing in `__init__.py` may import it.
+- Check before any push: `hermes plugins validate .` and `python -m unittest discover` (the MCP e2e tests skip without the `mcp` package, so say how many ran).
 - Catalog entry: PR `NousResearch/hermes-agent#149174` pins an exact commit. Any code change after the pin means a new commit,
   a new `sha` + `version` in `plugin-catalog/gogogoogle.yaml` on the PR branch (`josefacero/hermes-agent`, branch
   `add-gogogoogle-plugin`), and a bump of `version` in `plugin.yaml`.
