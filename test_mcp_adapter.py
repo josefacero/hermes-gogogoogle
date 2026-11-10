@@ -111,11 +111,61 @@ class AdapterTests(unittest.TestCase):
             self.adapter.delegate("missing")
         self.assertEqual([], self.backend.calls)
 
+    def test_code_is_short_and_survives_sloppy_retyping(self):
+        token = self.adapter.prepare(self.request)["token"]
+        self.assertRegex(token, r"^[abcdefghjkmnpqrstuvwxyz23456789]{12}$")
+        self.assertEqual("delegated", self.adapter.delegate(' "' + token.upper() + '"\n'))
+
+    def test_code_lifetime_is_five_minutes(self):
+        self.assertEqual(300, self.adapter.prepare(self.request)["expires_in_seconds"])
+        with patch.object(self.module.time, "monotonic", return_value=100):
+            token = self.adapter.prepare(self.request)["token"]
+        with patch.object(self.module.time, "monotonic", return_value=399):
+            self.assertEqual("delegated", self.adapter.delegate(token))
+
+    def test_role_is_required(self):
+        request = {k: v for k, v in self.request.items() if k != "role"}
+        with self.assertRaises(self.module.Refused):
+            self.adapter.prepare(request)
+        self.assertEqual([], self.backend.calls)
+
+    def test_drive_root_and_home_are_refused_as_roots(self):
+        for root in (self.module.Path.cwd().anchor, str(self.module.Path.home())):
+            with self.assertRaises(ValueError):
+                self.module.Adapter(self.backend, trusted=True, host="h", allowed_roots=[root])
+
+    def test_resume_must_look_like_a_conversation_id(self):
+        for bad in ("../x", "a b", "x" * 65, "-lead"):
+            with self.assertRaises(self.module.Refused):
+                self.adapter.prepare({**self.request, "resume": bad})
+        self.assertEqual("abc-123_X", self.adapter.prepare({**self.request, "resume": "abc-123_X"})["request"]["resume"])
+
+    def test_roots_accept_json_or_a_path_list(self):
+        self.assertEqual(["C:/a b", "D:/c"], self.module.parse_roots('["C:/a b", "D:/c"]'))
+        self.assertEqual(["x", "y"], self.module.parse_roots(os.pathsep.join(["x", " ", "y"])))
+        for bad in (None, "", '{"a": 1}', '"just a string"'):
+            with self.assertRaises(ValueError):
+                self.module.parse_roots(bad)
+
+    def test_startup_errors_name_the_variable(self):
+        base = {k: v for k, v in os.environ.items() if not k.startswith("GOGOGOOGLE_MCP_")}
+        cases = [({}, "GOGOGOOGLE_MCP_TRUSTED"),
+                 ({"GOGOGOOGLE_MCP_TRUSTED": "1"}, "GOGOGOOGLE_MCP_HOST"),
+                 ({"GOGOGOOGLE_MCP_TRUSTED": "1", "GOGOGOOGLE_MCP_HOST": "h"}, "GOGOGOOGLE_MCP_ALLOWED_ROOTS"),
+                 ({"GOGOGOOGLE_MCP_TRUSTED": "1", "GOGOGOOGLE_MCP_HOST": "h",
+                   "GOGOGOOGLE_MCP_ALLOWED_ROOTS": os.path.abspath(os.sep)}, "GOGOGOOGLE_MCP_ALLOWED_ROOTS")]
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gogogoogle_mcp.py")
+        for extra, name in cases:
+            done = subprocess.run([sys.executable, script], env={**base, **extra}, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(0, done.returncode)
+            self.assertIn(name, done.stderr)
+            self.assertNotIn("Traceback", done.stderr)
+
     def test_defaults_and_other_tools(self):
         with self.assertRaises(PermissionError):
-            self.adapter.prepare({"task": "work", "workdir": "."})
+            self.adapter.prepare({"task": "work", "workdir": ".", "role": "do"})
         self.adapter = self.module.Adapter(self.backend, trusted=True, host="local", allowed_roots=[str(self.module.Path.cwd())], allow_do=True)
-        prepared = self.adapter.prepare({"task": "work", "workdir": "."})
+        prepared = self.adapter.prepare({"task": "work", "workdir": ".", "role": "do"})
         self.assertEqual("do", prepared["request"]["role"])
         self.assertTrue(prepared["request"]["verify"])
         self.assertTrue(prepared["skip_permissions"])

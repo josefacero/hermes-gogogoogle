@@ -1,8 +1,8 @@
-"""Experimental stdio MCP prototype; do not deploy as a supported interface.
+"""Experimental stdio MCP server for Claude Code and Codex; a preview, tested on Windows only.
 
 Set GOGOGOOGLE_MCP_TRUSTED=1 and GOGOGOOGLE_MCP_HOST to an identifying label
-and GOGOGOOGLE_MCP_ALLOWED_ROOTS to a JSON array of existing absolute local
-directories. Set GOGOGOOGLE_MCP_ALLOW_DO=1 separately to enable do mode.
+and GOGOGOOGLE_MCP_ALLOWED_ROOTS to a JSON array (or an os.pathsep list) of existing
+absolute local directories. Set GOGOGOOGLE_MCP_ALLOW_DO=1 separately to enable do mode.
 These settings grant all clients access; they are not human approval or a sandbox.
 The optional MCP Python SDK is required only to start the server.
 """
@@ -17,12 +17,28 @@ import time
 from pathlib import Path
 
 
+CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i: a calling agent may retype the code
+CODE_LENGTH = 12
+CODE_SECONDS = 300
+
+
 class Refused(ValueError):
     """The adapter itself refused a request. Its text is a fixed message, safe to show the calling agent."""
 
 
 class Denied(PermissionError):
     """The adapter's policy refused a request. Fixed message, safe to show the calling agent."""
+
+
+def parse_roots(value):
+    """A JSON array of folders, or an os.pathsep list (shells such as PowerShell 5.1 strip the JSON quotes)."""
+    try:
+        roots = json.loads(value or "")
+    except json.JSONDecodeError:
+        roots = [part.strip() for part in (value or "").split(os.pathsep) if part.strip()]
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("workspace roots must be a non-empty list")
+    return roots
 
 
 def invoke(method, args):
@@ -49,8 +65,11 @@ class Adapter:
                 path = Path(root).resolve(strict=True)
                 if not path.is_dir():
                     raise ValueError("workspace root is not a directory")
+                home = Path.home().resolve()
             except (OSError, RuntimeError) as exc:
                 raise ValueError("workspace root is unavailable") from exc
+            if path == Path(path.anchor) or path == home:
+                raise ValueError("workspace root is a drive root or the home folder")
             self.roots.append(path)
         self.allow_do = allow_do is True
         self._pending = {}
@@ -78,7 +97,7 @@ class Adapter:
             raise Refused("invalid request fields")
         if not isinstance(args.get("task"), str) or not args["task"].strip() or not isinstance(args.get("workdir"), str) or not args["workdir"].strip():
             raise Refused("task and workdir are required strings")
-        role = args.get("role", "do")
+        role = args.get("role")  # required: no silent default to the privileged mode
         minutes = args.get("minutes", 10)
         verify = args.get("verify", True)
         background = args.get("background", False)
@@ -97,16 +116,17 @@ class Adapter:
             self._pending = {key: value for key, value in self._pending.items() if value[0] > now}
             if len(self._pending) >= 100:
                 raise Refused("too many pending requests")
-            token = secrets.token_urlsafe(32)
-            self._pending[token] = (now + 120, request)
+            token = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+            self._pending[token] = (now + CODE_SECONDS, request)
         return {"request": request.copy(), "host_label": self.host, "skip_permissions": role == "do",
-                "expires_in_seconds": 120, "token": token,
+                "expires_in_seconds": CODE_SECONDS, "token": token,
                 "notice": "Local execution under trusted configuration; this is not human approval."}
 
     def delegate(self, token):
         self._check()
         if not isinstance(token, str):
             raise Refused("invalid token")
+        token = token.strip().strip("'\"").strip().lower()  # agents add quotes, newlines or capitals
         with self._lock:
             entry = self._pending.pop(token, None)
         if entry is None or entry[0] <= time.monotonic():
@@ -127,18 +147,26 @@ class Adapter:
 def main():
     trusted = os.environ.get("GOGOGOOGLE_MCP_TRUSTED") == "1"
     host = os.environ.get("GOGOGOOGLE_MCP_HOST")
-    if not trusted or not host or not host.strip():
-        raise SystemExit("MCP server requires explicit trusted configuration and a host label")
+    if not trusted:
+        raise SystemExit("gogogoogle MCP server not started: set GOGOGOOGLE_MCP_TRUSTED=1 to accept that every "
+                         "client of this server may delegate within your policy (the server must be explicitly trusted).")
+    if not host or not host.strip():
+        raise SystemExit("gogogoogle MCP server not started: set GOGOGOOGLE_MCP_HOST to a label for this machine, such as my-laptop.")
     try:
-        roots = json.loads(os.environ.get("GOGOGOOGLE_MCP_ALLOWED_ROOTS", ""))
-        adapter = Adapter(None, trusted=trusted, host=host, allowed_roots=roots,
+        adapter = Adapter(None, trusted=trusted, host=host, allowed_roots=parse_roots(os.environ.get("GOGOGOOGLE_MCP_ALLOWED_ROOTS")),
                           allow_do=os.environ.get("GOGOGOOGLE_MCP_ALLOW_DO") == "1")
-    except (ValueError, TypeError):
-        raise SystemExit("MCP server requires valid existing absolute workspace roots") from None
+    except (ValueError, TypeError) as exc:  # Adapter's messages are fixed text and carry no path
+        raise SystemExit(f"gogogoogle MCP server not started: GOGOGOOGLE_MCP_ALLOWED_ROOTS is not usable ({exc}). Set it to existing "
+                         f"absolute project folders, as a JSON array or separated by '{os.pathsep}'. "
+                         "A drive root or your home folder is refused.") from None
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
-        from mcp.server.mcpserver import MCPServer as FastMCP
+        try:
+            from mcp.server.mcpserver import MCPServer as FastMCP
+        except ImportError:
+            raise SystemExit("gogogoogle MCP server not started: the optional 'mcp' package is missing. "
+                             "Install it for the interpreter that runs this file: <python> -m pip install mcp") from None
 
     spec = importlib.util.spec_from_file_location("gogogoogle_backend", Path(__file__).with_name("__init__.py"))
     backend = importlib.util.module_from_spec(spec)
@@ -148,15 +176,15 @@ def main():
     server = FastMCP("gogogoogle")
 
     @server.tool()
-    def prepare(task: str, workdir: str, role: str = "do", minutes: int = 10,
+    def prepare(task: str, workdir: str, role: str, minutes: int = 10,
                 verify: bool = True, background: bool = False, resume: str = "") -> dict:
-        """Show a local request and issue a single-use token; this is not human approval."""
+        """Show a local request and issue a single-use code; this is not human approval. role: do, research or review."""
         return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
                                         "verify": verify, "background": background, "resume": resume})
 
     @server.tool()
     def delegate(token: str) -> str | dict:
-        """Execute the unchanged prepared request using its single-use token."""
+        """Execute the unchanged prepared request. Pass the token from the prepare result as is."""
         return invoke(adapter.delegate, token)
 
     @server.tool()
