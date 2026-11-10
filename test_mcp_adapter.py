@@ -43,6 +43,12 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual("delegated", self.adapter.delegate(prepared["token"]))
         self.assertEqual(prepared["request"], self.backend.calls[0][1])
 
+    def test_background_reply_names_this_servers_job_tool(self):
+        self.backend.delegate = lambda args: '{"job": "0123456789ab", "status": "RUNNING", "note": "Poll with antigravity_job."}'
+        reply = self.adapter.delegate(self.adapter.prepare(self.request)["token"])
+        self.assertNotIn("antigravity_job", reply)
+        self.assertIn("Poll with the job tool.", reply)
+
     def test_single_use_expired_and_mutated_tokens_fail(self):
         with patch.object(self.module.time, "monotonic", return_value=100):
             first = self.adapter.prepare(self.request)["token"]

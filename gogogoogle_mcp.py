@@ -133,7 +133,9 @@ class Adapter:
             raise Refused("invalid, expired, or already used token")
         if self._workspace(entry[1]["workdir"]) != Path(entry[1]["workdir"]):
             raise Denied("prepared workspace changed")
-        return self.backend.delegate(entry[1])
+        result = self.backend.delegate(entry[1])
+        # the shared engine names the Hermes tool; on this server the tool is `job`
+        return result.replace("antigravity_job", "the job tool") if isinstance(result, str) else result
 
     def job(self, args):
         self._check()

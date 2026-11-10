@@ -102,12 +102,12 @@ When a model reports `Resets in 106h27m`, the plugin remembers that reset time a
 
 ## Use from Claude Code or Codex (experimental)
 
-`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It is a preview on the tag `mcp-preview-1`, not part of the released plugin, and it has been tested on Windows 11 only. The macOS and Linux lines below are untested.
+`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It is a preview on the tag `mcp-preview-2`, not part of the released plugin, and it has been tested on Windows 11 only. The macOS and Linux lines below are untested.
 
 ### 1. Get it
 
 ```
-git clone --branch mcp-preview-1 https://github.com/josefacero/hermes-gogogoogle
+git clone --branch mcp-preview-2 https://github.com/josefacero/hermes-gogogoogle
 ```
 
 You need Python 3.11 or newer, `agy` installed and signed in (see Setup below), and the optional `mcp` package installed for the same Python that will run the server: `<python> -m pip install mcp`, where `<python>` is the full path of that interpreter. The Hermes plugin itself stays standard-library only.
@@ -173,13 +173,17 @@ The skill tells the agent how to brief the worker and how to check the result. C
 
 All on one Windows 11 machine with agy 1.5.3. Each real run is one run, not a rate.
 
-- 91 automated tests, including a real MCP client driving the server against a fake `agy` (no quota): tool list, `review`, `do` refused and allowed, a background job polled to its result, a job from another server process.
+- 92 automated tests, including a real MCP client driving the server against a fake `agy` (no quota): tool list, `review`, `do` refused and allowed, a background job polled to its result, a job from another server process.
 - Real agy, Claude Code (`claude -p`): one `do` run that made an image file, passed.
 - Real agy, Codex (`codex exec`, auto-approve): one `do` image run passed on the fourth attempt. One earlier attempt ended at Codex's 300-second tool limit, one was a test-script bug, and in one Codex retyped the then 43-character code wrongly twice. The code is now 12 characters and tolerates quotes, spaces and capitals.
 - Real agy, Codex: one read-only `review` of a 14-line file found the three planted bugs with correct line numbers and changed no files.
-- Every real run above had `verify` off and used the earlier 43-character code. The 12-character code, the required `role` and the `;` list have passed only the automated tests.
+- The three real runs above had `verify` off and used the earlier 43-character code.
+- Real agy on the tag `mcp-preview-1` (12-character code, required `role`), headless, a 14-line file with three planted bugs, one attempt each, all passed:
+  - Claude Code (`claude -p`): `review` with the verifier on (found all three bugs, a verifier from another model family ran, no file changed); a background `review` polled with `job` to its result in the same session; a `review` limited to one minute that timed out and returned a conversation id; a `resume` with that id that ended OK (its result was not read in full); a `do` run that changed only the one file.
+  - Codex (`codex exec`, auto-approve): `review` with the verifier on (all three bugs, no file changed, the code passed correctly first time); a `do` run that changed only the one file.
+- Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says `job`. That fix has passed only an automated test.
 
-Not tested: an interactive session in either host, the verifier on this path with real agy, background jobs and resume with real agy, a repeat of any run, macOS, Linux, Docker and remote workers.
+Not tested: an interactive session in either host (the skill triggering, the approval prompt), a repeat of any run, a background job read from a second session with real agy, macOS, Linux, Docker and remote workers.
 
 ## Setup
 
