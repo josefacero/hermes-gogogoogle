@@ -130,10 +130,10 @@ The allowed roots decide where agy starts. **They are not containment:** agy can
 Claude Code, in PowerShell (one line; use your own paths):
 
 ```
-claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-pc -e "GOGOGOOGLE_MCP_ALLOWED_ROOTS=C:\Users\me\projects" -- "C:\path\to\python.exe" "C:\path\to\hermes-gogogoogle\gogogoogle_mcp.py"
+claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-pc -e "GOGOGOOGLE_MCP_ALLOWED_ROOTS=C:\Users\me\projects" '--' "C:\path\to\python.exe" "C:\path\to\hermes-gogogoogle\gogogoogle_mcp.py"
 ```
 
-Then run `claude mcp list`. It must show `gogogoogle` as connected. If it shows a failure, run the server command by hand with the same variables set to read the error.
+Keep the quotes around `'--'`: when `claude` is installed through npm, PowerShell runs it as a script and drops a bare `--`, and the command fails with `missing required argument 'commandOrUrl'`. Then run `claude mcp list`. It must show `gogogoogle` as connected. If it shows a failure, run the server command by hand with the same variables set to read the error.
 
 Claude Code on macOS or Linux (untested):
 
