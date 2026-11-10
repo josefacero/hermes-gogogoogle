@@ -137,6 +137,37 @@ class McpEndToEnd(unittest.TestCase):
         self.assertIn("error", asyncio.run(go()))
         self.assertEqual(self._argv_log(), [])
 
+    def test_background_returns_a_job_that_finishes(self):
+        async def go():
+            async with self._session() as s:
+                prep = _payload(await s.call_tool("prepare", {"task": "look", "workdir": str(self.work), "role": "review",
+                                                              "verify": False, "background": True}))
+                started = _payload(await s.call_tool("delegate", {"token": prep["token"]}))
+                for _ in range(100):  # the fake agy answers at once; 20 s is a generous cap
+                    record = _payload(await s.call_tool("job", {"id": started["job"]}))
+                    if record.get("status") != "RUNNING":
+                        break
+                    await asyncio.sleep(0.2)
+                return started, record
+        started, record = asyncio.run(go())
+        self.assertRegex(started["job"], r"^[0-9a-f]{12}$")
+        self.assertEqual(started["status"], "RUNNING")
+        self.assertEqual(record["status"], "OK")
+        self.assertIn("FAKE AGY REPLY", record["result"])
+
+    def test_job_started_by_another_server_process_reads_unknown(self):
+        jobs = self.home / "plugin-data" / "gogogoogle" / "jobs"
+        jobs.mkdir(parents=True)
+        (jobs / "0123456789ab.json").write_text(json.dumps({"status": "RUNNING", "process": "another", "phase": "WORKER"}), encoding="utf-8")
+
+        async def go():
+            async with self._session() as s:
+                return (_payload(await s.call_tool("job", {"id": "0123456789ab"})),
+                        _payload(await s.call_tool("job", {"id": "../../x"})))
+        lost, bad = asyncio.run(go())
+        self.assertEqual(lost["status"], "UNKNOWN")
+        self.assertIn("error", bad)
+
     def test_server_refuses_to_start_untrusted(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("GOGOGOOGLE_")}
         r = subprocess.run([sys.executable, str(HERE / "gogogoogle_mcp.py")], capture_output=True, text=True, env=env, timeout=30)
