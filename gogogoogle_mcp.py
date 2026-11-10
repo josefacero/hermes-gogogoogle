@@ -134,8 +134,10 @@ class Adapter:
         if self._workspace(entry[1]["workdir"]) != Path(entry[1]["workdir"]):
             raise Denied("prepared workspace changed")
         result = self.backend.delegate(entry[1])
-        # the shared engine names the Hermes tool; on this server the tool is `job`
-        return result.replace("antigravity_job", "the job tool") if isinstance(result, str) else result
+        # the shared engine's job-started note names the Hermes tool; here it is `job`. A foreground report stays as written.
+        if entry[1]["background"] and isinstance(result, str):
+            return result.replace("antigravity_job", "the job tool")
+        return result
 
     def job(self, args):
         self._check()

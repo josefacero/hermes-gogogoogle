@@ -152,6 +152,7 @@ class McpEndToEnd(unittest.TestCase):
         started, record = asyncio.run(go())
         self.assertRegex(started["job"], r"^[0-9a-f]{12}$")
         self.assertEqual(started["status"], "RUNNING")
+        self.assertEqual(started["note"], "Poll with the job tool.")  # the real engine's note, renamed for this server
         self.assertEqual(record["status"], "OK")
         self.assertIn("FAKE AGY REPLY", record["result"])
 

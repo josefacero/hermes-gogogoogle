@@ -45,9 +45,11 @@ class AdapterTests(unittest.TestCase):
 
     def test_background_reply_names_this_servers_job_tool(self):
         self.backend.delegate = lambda args: '{"job": "0123456789ab", "status": "RUNNING", "note": "Poll with antigravity_job."}'
-        reply = self.adapter.delegate(self.adapter.prepare(self.request)["token"])
+        reply = self.adapter.delegate(self.adapter.prepare({**self.request, "background": True})["token"])
         self.assertNotIn("antigravity_job", reply)
         self.assertIn("Poll with the job tool.", reply)
+        report = self.adapter.delegate(self.adapter.prepare(self.request)["token"])  # a foreground report is not edited
+        self.assertIn("antigravity_job", report)
 
     def test_single_use_expired_and_mutated_tokens_fail(self):
         with patch.object(self.module.time, "monotonic", return_value=100):

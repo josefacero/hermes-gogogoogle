@@ -102,12 +102,12 @@ When a model reports `Resets in 106h27m`, the plugin remembers that reset time a
 
 ## Use from Claude Code or Codex (experimental)
 
-`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It is a preview on the tag `mcp-preview-2`, not part of the released plugin, and it has been tested on Windows 11 only. The macOS and Linux lines below are untested.
+`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It is a preview on the tag `mcp-preview-3`, not part of the released plugin, and it has been tested on Windows 11 only. The macOS and Linux lines below are untested.
 
 ### 1. Get it
 
 ```
-git clone --branch mcp-preview-2 https://github.com/josefacero/hermes-gogogoogle
+git clone --branch mcp-preview-3 https://github.com/josefacero/hermes-gogogoogle
 ```
 
 You need Python 3.11 or newer, `agy` installed and signed in (see Setup below), and the optional `mcp` package installed for the same Python that will run the server: `<python> -m pip install mcp`, where `<python>` is the full path of that interpreter. The Hermes plugin itself stays standard-library only.
@@ -181,7 +181,7 @@ All on one Windows 11 machine with agy 1.5.3. Each real run is one run, not a ra
 - Real agy on the tag `mcp-preview-1` (12-character code, required `role`), headless, a 14-line file with three planted bugs, one attempt each, all passed:
   - Claude Code (`claude -p`): `review` with the verifier on (found all three bugs, a verifier from another model family ran, no file changed); a background `review` polled with `job` to its result in the same session; a `review` limited to one minute that timed out and returned a conversation id; a `resume` with that id that ended OK (its result was not read in full); a `do` run that changed only the one file.
   - Codex (`codex exec`, auto-approve): `review` with the verifier on (all three bugs, no file changed, the code passed correctly first time); a `do` run that changed only the one file.
-- Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says `job`. That fix has passed only an automated test.
+- Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says "the job tool". That fix has passed only an automated test.
 
 Not tested: an interactive session in either host (the skill triggering, the approval prompt), a repeat of any run, a background job read from a second session with real agy, macOS, Linux, Docker and remote workers.
 
