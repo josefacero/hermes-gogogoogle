@@ -144,18 +144,22 @@ class RelayInboxTests(unittest.TestCase):
 
     def test_starting_inbox_deletes_no_leftover_however_old(self):
         # a relay may still be writing a request or reading the previous inbox's answer; age cannot prove otherwise
-        fresh, old = self.spool / f'response.{OTHER_ID}.json', self.spool / 'request.0123456789abcdef.tmp'
-        for path in (fresh, old):
+        fresh = self.spool / f'response.{OTHER_ID}.json'
+        old = [self.spool / name for name in (
+            'request.0123456789abcdef.tmp', 'response.0123456789abcdef.json', 'cancel.0123456789abcdef')]
+        for path in (fresh, *old):
             path.write_text('{}')
-        os.utime(old, (0, 0))
+        for path in old:
+            os.utime(path, (0, 0))
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
         thread.join(3)
         self.assertEqual(served, [False])
-        self.assertTrue(fresh.exists())
-        self.assertTrue(old.exists())
+        for path in (fresh, *old):
+            self.assertTrue(path.exists(), path.name)
 
-    def test_inbox_releases_its_lock_when_it_ends(self):
-        thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
+    def test_inbox_holds_its_lock_while_it_runs_and_releases_it_when_it_ends(self):
+        thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=1)
+        self.assertTrue((self.spool / 'inbox.lock').exists())
         thread.join(3)
         self.assertEqual(served, [False])
         self.assertFalse((self.spool / 'inbox.lock').exists())
