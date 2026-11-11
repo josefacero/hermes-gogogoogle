@@ -22,10 +22,10 @@ class RelayInboxTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.spool = Path(self.tmp.name)
 
-    def start_inbox(self, run, approved='approved task', idle=5):
+    def start_inbox(self, run, approved='approved task', idle=5, **options):
         served = []
         thread = threading.Thread(target=lambda: served.append(
-            remote_inbox.serve_one(self.spool, idle, approved, run)))
+            remote_inbox.serve_one(self.spool, idle, approved, run, **options)))
         thread.start()
         until = time.monotonic() + 3
         while not (self.spool / 'ready').exists() and time.monotonic() < until:
@@ -149,6 +149,48 @@ class RelayInboxTests(unittest.TestCase):
         self.assertEqual(json.loads((self.spool / f'response.{OTHER_ID}.json').read_text()),
                          {'error': 'invalid request'})
         self.assertFalse(list(self.spool.glob('claimed.*')))
+
+    def ask(self, task, mode=None, approved='approved task', run=None, **extra):
+        """Send one request with `task` through an inbox in `mode`; return (answer, tasks the run saw)."""
+        seen = []
+        options = {} if mode is None else {'mode': mode}
+        thread, _ = self.start_inbox(run or (lambda request, *a: seen.append(request['task']) or {'status': 'OK'}),
+                                     approved=approved, **options)
+        request = {**REQUEST, 'task': task, **extra}
+        answer = remote_relay.relay(json.dumps(request).encode(), self.spool, threading.Event(), 5)
+        thread.join(5)
+        return answer, seen
+
+    def test_default_mode_refuses_a_task_that_is_not_the_approved_one(self):
+        answer, seen = self.ask('a different task')
+        self.assertEqual(answer, {'error': 'request refused by worker policy'})
+        self.assertEqual(seen, [])
+        self.assertEqual(self.ask('a different task', mode='exact')[0], {'error': 'request refused by worker policy'})
+
+    def test_lead_approved_mode_accepts_another_task_up_to_the_limit(self):
+        answer, seen = self.ask('a different task', mode='lead-approved')
+        self.assertEqual((answer, seen), ({'status': 'OK'}, ['a different task']))
+        limit = remote_inbox.LEAD_TASK_LIMIT
+        self.assertEqual(limit, 1000)
+        self.assertEqual(self.ask('x' * limit, mode='lead-approved')[0], {'status': 'OK'})
+        answer, seen = self.ask('x' * (limit + 1), mode='lead-approved')
+        self.assertEqual((answer, seen), ({'error': 'request refused by worker policy'}, []))
+
+    def test_lead_approved_mode_refuses_an_empty_or_non_text_task(self):
+        for task in ('', '   ', None, 5):
+            answer, seen = self.ask(task, mode='lead-approved')
+            self.assertEqual((answer, seen), ({'error': 'request refused by worker policy'}, []), task)
+
+    def test_unknown_mode_refuses_everything(self):
+        answer, seen = self.ask('approved task', mode='anything')
+        self.assertEqual((answer, seen), ({'error': 'request refused by worker policy'}, []))
+
+    def test_supervisor_still_refuses_do_verify_and_resume_in_both_modes(self):
+        run = remote_inbox.remote_supervisor.run_supervised
+        for mode in ('exact', 'lead-approved'):
+            for extra in ({'role': 'do'}, {'verify': True}, {'resume': 'abc'}):
+                answer, _ = self.ask('approved task', mode=mode, run=run, **extra)
+                self.assertEqual(answer, {'error': 'request refused by worker policy'}, (mode, extra))
 
     def test_relay_process_exits_cleanly_while_input_stays_open(self):
         (self.spool / 'ready').touch()
