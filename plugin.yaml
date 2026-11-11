@@ -25,3 +25,4 @@ provides_tools:
   - antigravity_delegate
   - antigravity_job
   - antigravity_stats
+  - antigravity_remote_review  # registered only when remote_workers is set
