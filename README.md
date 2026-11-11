@@ -189,6 +189,8 @@ One interactive Hermes background review also passed on Windows in an isolated p
 
 ## Remote review on a second Windows machine (experimental)
 
+Remote review requires gogogoogle 0.6.0 or later. Check the installed plugin version: a catalog install pinned to 0.5.0 does not include this feature.
+
 An operator can let a lead machine send **one review request at a time** over SSH to a second Windows machine (the worker), which runs agy there under its own Antigravity account. Review only: no `do`, no background, no resume. Nothing runs differently unless you configure a worker. The one visible change without one: the plugin's tool list names `antigravity_remote_review`, which is registered only once a worker is configured.
 
 **Tested:** Windows 11 to Windows 11 over a private network, one real review from Hermes Desktop and one from Claude Code (MCP), each with and without the verifier pass (four runs), on a throwaway folder. Each is one run, not a rate. Those runs were made before the last review fixes to the relay, inbox, supervisor, runner and MCP server. Two more real reviews with the verifier pass then ran on the final code, one from Hermes Desktop and one from Claude Code (MCP); beyond those, the fixes are covered by automated tests only. **Not tested:** Linux, macOS, Docker, a non-administrator worker account, a lost network connection during a run, and a run that takes the full 8 minutes.
