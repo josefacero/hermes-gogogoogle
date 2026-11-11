@@ -185,7 +185,8 @@ class RelayInboxTests(unittest.TestCase):
             if Path(dst).name.startswith('claimed.'):
                 seen.append(self.wait_for('response.*.json'))  # hold the request back until the inbox has answered
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'})
-        with unittest.mock.patch.object(remote_relay.os, 'rename', slow_rename):
+        with unittest.mock.patch.object(remote_relay.os, 'rename', slow_rename), \
+                unittest.mock.patch.object(remote_inbox, 'REQUEST_WAIT_SECONDS', 0.2):  # keeps the 3 s wait above far from the edge
             result = remote_relay.relay(json.dumps(REQUEST).encode(), self.spool, threading.Event(), 5)
         thread.join(3)
         self.assertTrue(seen and seen[0])
