@@ -27,6 +27,8 @@ def execute(request, roots, allow_do, backend):
         if not workspace.is_dir() or not any(workspace == root or root in workspace.parents for root in allowed):
             return {'error': 'workspace is outside worker roots'}
         args = dict(request, task=task.strip(), workdir=str(workspace), role=role, background=False)
+        if getattr(backend, 'VERIFIERS', None):
+            backend.VERIFIERS = backend.VERIFIERS[:1]  # one 5-minute verifier fits the worker deadline; a fallback chain does not
         result = json.loads(backend.delegate(args))
         return result if isinstance(result, dict) else {'error': 'invalid worker response'}
     except (OSError, ValueError, TypeError):

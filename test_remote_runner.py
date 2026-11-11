@@ -73,6 +73,14 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(backend.calls[0]['workdir'], str(workspace.resolve()))
             self.assertFalse(backend.calls[0]['background'])
 
+    def test_worker_verifier_chain_is_one_model(self):
+        # one 5-minute verifier fits the 480 s worker deadline; a fallback chain could not
+        with tempfile.TemporaryDirectory() as root:
+            backend = Backend()
+            backend.VERIFIERS = ['first-model', 'second-model', 'third-model']
+            remote_runner.execute({'task': 'review', 'workdir': root, 'role': 'review', 'verify': True}, [root], False, backend)
+            self.assertEqual(backend.VERIFIERS, ['first-model'])
+
     def test_outside_workspace_and_privileged_role_are_denied(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
             backend = Backend()
