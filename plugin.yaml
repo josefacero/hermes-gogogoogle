@@ -16,6 +16,9 @@ config_schema:
   browser_mode:
     type: str
     description: "How agy's browser runs for research, review and verifier passes: headless (default), visible, or off."
+  remote_workers:
+    type: dict
+    description: "Experimental. Named remote workers for antigravity_remote_review: name -> host, launcher, workdir. Unset means no remote tool."
 provides_hooks:
   - pre_tool_call
 provides_tools:
