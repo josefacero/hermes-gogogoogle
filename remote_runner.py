@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 LIMIT = 1024 * 1024
+UNKNOWN_NOTE = 'Work may still run or have completed; do not automatically retry.'
 
 
 def execute(request, roots, allow_do, backend):
@@ -26,13 +27,17 @@ def execute(request, roots, allow_do, backend):
         allowed = [Path(root).resolve(strict=True) for root in roots if Path(root).is_absolute()]
         if not workspace.is_dir() or not any(workspace == root or root in workspace.parents for root in allowed):
             return {'error': 'workspace is outside worker roots'}
-        args = dict(request, task=task.strip(), workdir=str(workspace), role=role, background=False)
-        if getattr(backend, 'VERIFIERS', None):
-            backend.VERIFIERS = backend.VERIFIERS[:1]  # one 5-minute verifier fits the worker deadline; a fallback chain does not
-        result = json.loads(backend.delegate(args))
-        return result if isinstance(result, dict) else {'error': 'invalid worker response'}
     except (OSError, ValueError, TypeError):
-        return {'error': 'worker request failed'}
+        return {'error': 'worker request failed'}  # nothing ran yet
+    args = dict(request, task=task.strip(), workdir=str(workspace), role=role, background=False)
+    if getattr(backend, 'VERIFIERS', None):
+        backend.VERIFIERS = backend.VERIFIERS[:1]  # one 5-minute verifier fits the worker deadline; a fallback chain does not
+    try:
+        result = json.loads(backend.delegate(args))
+    except (OSError, ValueError, TypeError):
+        result = None
+    # from here agy may have run: a failure or an unreadable answer is unknown, never a plain error that invites a retry
+    return result if isinstance(result, dict) else {'status': 'UNKNOWN', 'error': 'worker request failed', 'note': UNKNOWN_NOTE}
 
 
 def main():

@@ -493,7 +493,7 @@ def stats(args, **kwargs):
 
 
 REMOTE_WORKERS = {}  # name -> {host, launcher, workdir}; filled by register() from the operator's `remote_workers` setting
-REMOTE_TASK_LIMIT = 1000  # short enough to read whole in the approval prompt; the worker enforces the same limit
+REMOTE_TASK_LIMIT = 1000  # short enough to read whole in the approval prompt; the worker enforces the same limit in lead-approved mode
 REMOTE_TIMEOUT = 200  # the worker's own deadline is 150 s
 REMOTE_VERIFY_TIMEOUT = 560  # with the verifier pass the worker's deadline is 480 s, the relay waits 540 s
 _remote_transport = None  # loaded only when remote_workers is set, so a plain install never imports it
@@ -600,7 +600,7 @@ def register(ctx):
             "name": "antigravity_remote_review",
             "description": ("gogogoogle (experimental): ask Antigravity `agy` on another machine to REVIEW a folder there. "
                             "Review only: no edits; a fresh verifier pass runs on the worker unless verify is false. The folder, host and limits are fixed by the operator; "
-                            "Hermes asks the user to approve first. An UNKNOWN result means the work may still run: do not retry."),
+                            "Hermes asks the user to approve first. An UNKNOWN result means the work may still run, TIMED OUT that it was stopped at the worker's deadline: do not retry either."),
             "parameters": {"type": "object", "properties": {
                 "task": {"type": "string", "description": f"What to review, at most {REMOTE_TASK_LIMIT} characters. agy has no memory of this chat."},
                 "worker": {"type": "string", "enum": list(REMOTE_WORKERS), "description": "Name of the configured remote worker."},

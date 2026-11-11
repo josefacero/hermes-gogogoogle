@@ -98,6 +98,8 @@ def _serve(spool, request, cancel, request_id, approved, run, mode):
             print(f'INBOX received a task: {len(parsed["task"])} chars, sha256 {digest}', flush=True)  # never the text
         if not isinstance(parsed, dict) or not task_allowed(parsed.get('task'), approved, mode):
             result = {'error': 'request refused by worker policy'}
+        elif cancel.exists():  # the relay already gave up: start nothing
+            result = {'error': 'request cancelled before it started'}
         else:
             disconnected, finished = threading.Event(), threading.Event()
 

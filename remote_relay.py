@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Experimental SSH-side relay: hands one request to a worker inbox in the signed-in desktop session.
 
-A key-authenticated Windows SSH session cannot read Credential Manager, where agy keeps its sign-in,
-so agy cannot run here. This side only passes bytes across; policy, deadline and cleanup stay in the inbox.
+On the tested machine agy could not use its sign-in (kept in Credential Manager) from a key-authenticated
+Windows SSH session, so agy does not run here. This side only passes bytes across; policy, deadline and cleanup stay in the inbox.
 """
 import json
 import os
@@ -45,8 +45,13 @@ def relay(data, spool, disconnected, wait_seconds=WAIT_SECONDS):
                 result = json.loads(response.read_bytes())
                 response.unlink()
             except (OSError, ValueError):
-                return {'status': 'UNKNOWN', 'error': 'invalid worker response', 'note': UNKNOWN_NOTE}
-            return result if isinstance(result, dict) else {'status': 'UNKNOWN', 'error': 'invalid worker response'}
+                result = None
+            try:
+                request.unlink(missing_ok=True)  # an inbox that answered without waiting for a slow request leaves it behind
+            except OSError:
+                pass
+            return result if isinstance(result, dict) else {
+                'status': 'UNKNOWN', 'error': 'invalid worker response', 'note': UNKNOWN_NOTE}
         time.sleep(0.1)
     try:
         cancel.touch()

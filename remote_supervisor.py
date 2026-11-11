@@ -1,4 +1,4 @@
-"""Windows remote supervisor; execution remains disabled pending cleanup guarantees."""
+"""Experimental Windows worker supervisor: runs one review under a deadline inside a Job Object (cleanup, not containment)."""
 
 import ctypes
 from ctypes import wintypes
@@ -173,7 +173,8 @@ def run_supervised(request, deadline_seconds, disconnected=None):
         result = _run_job([sys.executable, str(Path(__file__).with_name('remote_runner.py'))],
                           payload, deadline_seconds, disconnected)
         if result['status'] == 'TIMED OUT':
-            return {'status': 'TIMED OUT', 'error': 'worker deadline exceeded'}
+            return {'status': 'TIMED OUT', 'error': 'worker deadline exceeded',
+                    'note': 'Stopped at the worker deadline; part of the work may have run. Do not automatically retry.'}
         if result['status'] == 'DISCONNECTED':
             return {'status': 'UNKNOWN', 'error': 'connection lost'}
         if result['status'] != 'DONE':

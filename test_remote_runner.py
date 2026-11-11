@@ -81,6 +81,21 @@ class RunnerTests(unittest.TestCase):
             remote_runner.execute({'task': 'review', 'workdir': root, 'role': 'review', 'verify': True}, [root], False, backend)
             self.assertEqual(backend.VERIFIERS, ['first-model'])
 
+    def test_failure_once_the_backend_was_called_is_unknown_not_a_plain_error(self):
+        # agy may have run by then; a plain error would invite a retry
+        with tempfile.TemporaryDirectory() as root:
+            for outcome in (OSError('log write failed'), 'not json', '[1]'):
+                backend = Backend()
+
+                def delegate(args, outcome=outcome):
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+                backend.delegate = delegate
+                result = remote_runner.execute({'task': 'x', 'workdir': root, 'role': 'review'}, [root], False, backend)
+                self.assertEqual(result['status'], 'UNKNOWN', outcome)
+                self.assertIn('do not automatically retry', result['note'])
+
     def test_outside_workspace_and_privileged_role_are_denied(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
             backend = Backend()

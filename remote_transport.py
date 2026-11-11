@@ -1,4 +1,4 @@
-"""Experimental SSH JSON transport; not integrated or ready for deployment."""
+"""Experimental SSH JSON transport for the remote review tool; loaded only when a remote worker is configured."""
 
 import json
 import math

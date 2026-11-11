@@ -72,12 +72,14 @@ class McpEndToEnd(unittest.TestCase):
         self._tmp.cleanup()
 
     @asynccontextmanager
-    async def _session(self, allow_do=False, roots=None):
+    async def _session(self, allow_do=False, roots=None, extra=None):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
         env =dict(os.environ, GOGOGOOGLE_MCP_TRUSTED="1", GOGOGOOGLE_MCP_HOST="test-host", HERMES_HOME=str(self.home),
                    GOGOGOOGLE_MCP_ALLOWED_ROOTS=json.dumps(roots or [str(self.work)]),
                    PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""))
+        env.pop("GOGOGOOGLE_MCP_REMOTE_WORKERS", None)
+        env.update(extra or {})
         if allow_do:
             env["GOGOGOOGLE_MCP_ALLOW_DO"] = "1"
         params = StdioServerParameters(command=sys.executable, args=[str(HERE / "gogogoogle_mcp.py")], env=env)
@@ -95,6 +97,18 @@ class McpEndToEnd(unittest.TestCase):
             async with self._session() as s:
                 return sorted(t.name for t in (await s.list_tools()).tools)
         self.assertEqual(asyncio.run(go()), ["delegate", "job", "prepare", "stats"])
+
+    def test_prepare_parameters_change_only_when_a_remote_worker_is_configured(self):
+        async def schema(extra):
+            async with self._session(extra=extra) as s:
+                tool = next(t for t in (await s.list_tools()).tools if t.name == "prepare")
+                dumped = tool.model_dump()
+                schema = dumped.get("input_schema") or dumped["inputSchema"]  # the field name differs between mcp versions
+                return sorted(schema["properties"]), sorted(schema["required"])
+        plain = ["background", "minutes", "resume", "role", "task", "verify", "workdir"]
+        self.assertEqual(asyncio.run(schema({})), (plain, ["role", "task", "workdir"]))  # as released
+        worker = {"GOGOGOOGLE_MCP_REMOTE_WORKERS": json.dumps({"w": {"host": "h", "launcher": "/l", "workdir": "C:/w"}})}
+        self.assertEqual(asyncio.run(schema(worker)), (sorted(plain + ["worker"]), ["role", "task"]))
 
     def test_review_runs_without_skipping_permissions_and_token_is_single_use(self):
         async def go():

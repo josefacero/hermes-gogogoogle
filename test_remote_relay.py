@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import remote_inbox
@@ -158,11 +159,38 @@ class RelayInboxTests(unittest.TestCase):
             self.assertTrue(path.exists(), path.name)
 
     def test_inbox_holds_its_lock_while_it_runs_and_releases_it_when_it_ends(self):
-        thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=1)
-        self.assertTrue((self.spool / 'inbox.lock').exists())
+        held = []  # checked from inside the served request, so no timer decides the outcome
+        thread, served = self.start_inbox(lambda *a: held.append((self.spool / 'inbox.lock').exists()) or {'status': 'OK'})
+        remote_relay.relay(json.dumps(REQUEST).encode(), self.spool, threading.Event(), 5)
         thread.join(3)
-        self.assertEqual(served, [False])
+        self.assertEqual((held, served), ([True], [True]))
         self.assertFalse((self.spool / 'inbox.lock').exists())
+
+    def test_request_cancelled_before_the_inbox_starts_it_never_runs(self):
+        calls = []
+        thread, served = self.start_inbox(lambda *a: calls.append(a) or {'status': 'OK'})
+        (self.spool / f'request.{OTHER_ID}.json').write_text(json.dumps(REQUEST))
+        (self.spool / f'cancel.{OTHER_ID}').touch()  # the relay gave up between its claim and the inbox reading it
+        os.rename(self.spool / 'ready', self.spool / f'claimed.{OTHER_ID}')
+        thread.join(3)
+        self.assertEqual((calls, served), ([], [True]))
+
+    def test_relay_removes_a_request_the_inbox_answered_without_reading(self):
+        # an inbox that gave up waiting for a slow request answers and leaves; the late request file must not stay
+        seen = []
+        real_rename = os.rename
+
+        def slow_rename(src, dst):
+            real_rename(src, dst)
+            if Path(dst).name.startswith('claimed.'):
+                seen.append(self.wait_for('response.*.json'))  # hold the request back until the inbox has answered
+        thread, served = self.start_inbox(lambda *a: {'status': 'OK'})
+        with unittest.mock.patch.object(remote_relay.os, 'rename', slow_rename):
+            result = remote_relay.relay(json.dumps(REQUEST).encode(), self.spool, threading.Event(), 5)
+        thread.join(3)
+        self.assertTrue(seen and seen[0])
+        self.assertEqual(result, {'error': 'invalid request'})
+        self.assertEqual(list(self.spool.iterdir()), [])
 
     def test_idle_inbox_closes_its_window_and_leaves_nothing(self):
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)

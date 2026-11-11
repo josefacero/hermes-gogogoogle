@@ -229,13 +229,21 @@ def main():
                          "worker name (a-z, 0-9, -) to host, launcher and workdir strings.") from None
     server = FastMCP("gogogoogle")
 
-    @server.tool()
-    def prepare(task: str, role: str, workdir: str = "", minutes: int = 10,
-                verify: bool = True, background: bool = False, resume: str = "", worker: str = "") -> dict:
-        """Show a request and issue a single-use code; this is not human approval. role: do, research or review.
-        worker (experimental): name of an operator-configured remote worker; review only, its folder is fixed by the operator."""
-        return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
-                                        "verify": verify, "background": background, "resume": resume, "worker": worker})
+    if adapter.remote_workers:  # the tool's parameters change only for an operator who configured a remote worker
+        @server.tool()
+        def prepare(task: str, role: str, workdir: str = "", minutes: int = 10,
+                    verify: bool = True, background: bool = False, resume: str = "", worker: str = "") -> dict:
+            """Show a request and issue a single-use code; this is not human approval. role: do, research or review.
+            worker (experimental): name of an operator-configured remote worker; review only, its folder is fixed by the operator."""
+            return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
+                                            "verify": verify, "background": background, "resume": resume, "worker": worker})
+    else:
+        @server.tool()
+        def prepare(task: str, workdir: str, role: str, minutes: int = 10,
+                    verify: bool = True, background: bool = False, resume: str = "") -> dict:
+            """Show a local request and issue a single-use code; this is not human approval. role: do, research or review."""
+            return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
+                                            "verify": verify, "background": background, "resume": resume})
 
     @server.tool()
     def delegate(token: str) -> str | dict:
