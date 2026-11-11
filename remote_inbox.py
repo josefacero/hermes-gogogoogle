@@ -17,6 +17,7 @@ import remote_supervisor
 
 LIMIT = 1024 * 1024
 LEAD_TASK_LIMIT = 1000  # short enough to read whole in the lead's approval prompt
+STALE_SECONDS = 600  # longer than any relay waits (540 s), so no live relay still wants a file this old
 REQUEST_WAIT_SECONDS = 2  # a relay writes the request before it claims, so this only covers a relay that died
 
 
@@ -31,11 +32,28 @@ def task_allowed(task, approved, mode):
 
 def serve_one(spool, idle_seconds, approved, run=remote_supervisor.run_supervised, mode='exact'):
     """Wait for one request, answer it, return True. False when none arrived in time."""
+    lock = spool / 'inbox.lock'
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))  # atomic: two inboxes starting together cannot both own the spool
+    except FileExistsError:
+        raise SystemExit('another inbox owns the spool; remove inbox.lock by hand if it is stale') from None
+    try:
+        return _serve_window(spool, idle_seconds, approved, run, mode)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _serve_window(spool, idle_seconds, approved, run, mode):
     ready, closed = spool / 'ready', spool / 'closed'
     if ready.exists() or any(spool.glob('claimed.*')):
         raise SystemExit('another inbox or an unfinished claim is in the spool; remove the files by hand if it is stale')
-    for stale in [*spool.glob('request.*'), *spool.glob('response.*'), *spool.glob('cancel.*'), closed]:
-        stale.unlink(missing_ok=True)
+    closed.unlink(missing_ok=True)
+    for stale in [*spool.glob('request.*'), *spool.glob('response.*'), *spool.glob('cancel.*')]:
+        try:  # a younger file may belong to a relay that is still writing its request or reading the last answer
+            if time.time() - stale.stat().st_mtime > STALE_SECONDS:
+                stale.unlink()
+        except OSError:
+            pass
     ready.touch()
     until = time.monotonic() + idle_seconds
     claimed = None

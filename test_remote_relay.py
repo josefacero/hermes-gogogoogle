@@ -135,6 +135,26 @@ class RelayInboxTests(unittest.TestCase):
             remote_inbox.serve_one(self.spool, 1, 'approved task')
         self.assertTrue((self.spool / f'claimed.{OTHER_ID}').exists())
 
+    def test_inbox_lock_keeps_a_second_inbox_out_and_is_released(self):
+        (self.spool / 'inbox.lock').touch()  # another inbox owns the spool
+        with self.assertRaises(SystemExit):
+            remote_inbox.serve_one(self.spool, 1, 'approved task')
+        self.assertTrue((self.spool / 'inbox.lock').exists())
+        self.assertFalse((self.spool / 'ready').exists())
+
+    def test_starting_inbox_keeps_a_fresh_answer_and_removes_an_old_one(self):
+        # a relay may still be reading the previous inbox's answer; only files past any relay's wait are stale
+        fresh, old = self.spool / f'response.{OTHER_ID}.json', self.spool / 'response.0123456789abcdef.json'
+        for path in (fresh, old):
+            path.write_text('{}')
+        long_ago = time.time() - remote_inbox.STALE_SECONDS - 5
+        os.utime(old, (long_ago, long_ago))
+        thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
+        thread.join(3)
+        self.assertEqual(served, [False])
+        self.assertTrue(fresh.exists())
+        self.assertFalse(old.exists())
+
     def test_idle_inbox_closes_its_window_and_leaves_nothing(self):
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
         thread.join(3)

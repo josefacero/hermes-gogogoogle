@@ -183,9 +183,28 @@ All on one Windows 11 machine with agy 1.5.3. Each real run is one run, not a ra
   - Codex (`codex exec`, auto-approve): `review` with the verifier on (all three bugs, no file changed, the code passed correctly first time); a `do` run that changed only the one file.
 - Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says "the job tool". The fix also passed two real headless Claude Code runs from a fresh clone: one background and one foreground.
 
-Interactive Codex and Claude Code review and do runs also passed on Windows. The Codex review and Claude Code do run showed a request for user approval; Claude Code was in auto mode. The maintainer also ran an interactive Claude Code review by hand with real agy and saw the approval step (a report, not recorded evidence). A background job read from a second session with real agy, macOS, Linux, Docker and remote workers remain untested.
+Interactive Codex and Claude Code review and do runs also passed on Windows. The Codex review and Claude Code do run showed a request for user approval; Claude Code was in auto mode. The maintainer also ran an interactive Claude Code review by hand with real agy and saw the approval step (a report, not recorded evidence). A background job read from a second session with real agy, macOS, Linux and Docker remain untested. The remote worker has its own section below.
 
 One interactive Hermes background review also passed on Windows in an isolated profile: the job completed in that profile, its verifier passed, and the working tree stayed clean.
+
+## Remote review on a second Windows machine (experimental)
+
+An operator can let a lead machine send **one review request at a time** over SSH to a second Windows machine (the worker), which runs agy there under its own Antigravity account. Review only: no `do`, no background, no resume. Nothing changes for you unless you configure a worker.
+
+**Tested:** Windows 11 to Windows 11 over a private network, one real review from Hermes Desktop and one from Claude Code (MCP), each with and without the verifier pass, on a throwaway folder. Each is one run, not a rate. **Not tested:** Linux, macOS, Docker, a non-administrator worker account, a lost network connection during a run, and a run that takes the full 8 minutes.
+
+**It is not a sandbox.** The worker checks that the folder is inside the roots the worker operator set, but agy's read-only rules are instructions: agy can read files outside that folder on the worker, and what it reads goes to Google. A Windows Job Object stops the worker's processes at the deadline; that is cleanup, not containment.
+
+How it fits together:
+
+- **Worker, SSH side.** The lead's key must be restricted in `authorized_keys` (or `administrators_authorized_keys`) to a forced command that runs `remote_relay.py`, with forwarding and terminals off (in OpenSSH, key options such as `restrict,command="..."`). The plugin does not set this up or check it. Use a key that does nothing else.
+- **Worker, desktop side.** A key-authenticated Windows SSH session cannot read the sign-in agy keeps in Credential Manager, so the relay only passes the request through a spool folder to `remote_inbox.py`. You start the inbox by hand in the signed-in desktop session; it answers one request and exits. No inbox running means the request is refused and nothing is queued.
+- **Worker policy comes from the worker's environment, never from the request:** `GOGOGOOGLE_WORKER_SPOOL` (the spool folder), `GOGOGOOGLE_WORKER_ROOTS` (folders a request may name; a caller holding the key can pick any folder inside them), `GOGOGOOGLE_WORKER_PYTHON`, and `GOGOGOOGLE_WORKER_TASK_MODE`: `exact` (default; only the text in `GOGOGOOGLE_WORKER_APPROVED_TASK` runs) or `lead-approved` (any task up to 1,000 characters; the worker then trusts that a person approved it on the lead, which it cannot check).
+- **The spool holds the task text and the answer as files** while a request is in flight, and a crash can leave them there. Keep the folder readable only by the worker account, and delete leftovers. If an inbox is killed, remove `inbox.lock`, `ready` and `claimed.*` by hand before starting another.
+- **Lead, Hermes.** Set `plugins.entries.gogogoogle.settings.remote_workers` to a map of name to `host` (an SSH alias), `launcher` and `workdir`, then restart the gateway. The tool `antigravity_remote_review` appears only then. Its approval prompt shows the worker, host, remote folder and the full task. Other plugins that rewrite tool arguments after approval can change what is sent; do not combine them with this tool.
+- **Lead, Claude Code or Codex.** Set `GOGOGOOGLE_MCP_REMOTE_WORKERS` to the same map as JSON and call `prepare` with `worker`. The server does not ask a person: add an `ask` permission rule for the `delegate` tool, or an auto-approving host sends the request unattended. A verified review can take up to about 9 minutes; raise your host's tool-call time limit or pass `verify=false`.
+- **Time limits.** Worker: 150 seconds, or 480 with the verifier pass (default on; the worker uses one verifier model). The relay waits 540 seconds and the lead 200 or 560.
+- **`UNKNOWN` means unknown.** A lost connection, a timeout or `UNKNOWN` does not prove the work stopped or did not run. Cancelling is best effort. Do not retry automatically; look at the worker first.
 
 ## Setup
 
