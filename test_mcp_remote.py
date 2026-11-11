@@ -48,12 +48,15 @@ class RemoteAdapterTests(unittest.TestCase):
 
     def test_prepared_summary_names_the_worker_and_remote_folder(self):
         prepared = self.adapter().prepare({"task": " review calc.py ", "workdir": "C:/elsewhere", "role": "review",
-                                           "worker": "worker-one", "minutes": 30, "verify": True})
+                                           "worker": "worker-one", "minutes": 30})
         request = prepared["request"]
         self.assertEqual((request["worker"], request["remote_host"], request["remote_workdir"]),
                          ("worker-one", "gg-worker", "C:/work/fixture"))
         self.assertEqual((request["task"], request["role"], request["minutes"], request["verify"]),
-                         ("review calc.py", "review", 1, False))
+                         ("review calc.py", "review", 1, True))  # verify defaults on, as for local requests
+        off = self.adapter().prepare({"task": "t", "workdir": "", "role": "review", "worker": "worker-one", "verify": False})
+        self.assertFalse(off["request"]["verify"])
+        self.assertIn("verifier off", off["notice"])
         self.assertNotIn("workdir", request)
         self.assertIn("not a sandbox", prepared["notice"])
         self.assertIn("Google", prepared["notice"])
@@ -62,7 +65,7 @@ class RemoteAdapterTests(unittest.TestCase):
         adapter = self.adapter()
         token = adapter.prepare({"task": "review calc.py", "workdir": "", "role": "review", "worker": "worker-one"})["token"]
         self.assertEqual(adapter.delegate(token), '{"status": "OK"}')
-        self.assertEqual(self.backend.calls, [("remote_review", {"task": "review calc.py", "worker": "worker-one"})])
+        self.assertEqual(self.backend.calls, [("remote_review", {"task": "review calc.py", "worker": "worker-one", "verify": True})])
         self.assertIn("error", self.module.invoke(adapter.delegate, token))  # single use
         self.assertEqual(len(self.backend.calls), 1)
 

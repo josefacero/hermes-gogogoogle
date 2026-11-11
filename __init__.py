@@ -495,6 +495,7 @@ def stats(args, **kwargs):
 REMOTE_WORKERS = {}  # name -> {host, launcher, workdir}; filled by register() from the operator's `remote_workers` setting
 REMOTE_TASK_LIMIT = 1000  # short enough to read whole in the approval prompt; the worker enforces the same limit
 REMOTE_TIMEOUT = 200  # the worker's own deadline is 150 s
+REMOTE_VERIFY_TIMEOUT = 560  # with the verifier pass the worker's deadline is 480 s, the relay waits 540 s
 _remote_transport = None  # loaded only when remote_workers is set, so a plain install never imports it
 
 
@@ -522,9 +523,11 @@ def remote_review(args, **kwargs):
     if not task or len(task) > REMOTE_TASK_LIMIT:
         return json.dumps({"error": f"task is required and must be at most {REMOTE_TASK_LIMIT} characters"})
     cfg = REMOTE_WORKERS[name]
-    request = {"task": task, "workdir": cfg["workdir"], "role": "review", "minutes": 1, "verify": False, "background": False}
+    verify = args.get("verify") is not False  # as for local runs: only an explicit false skips the verifier
+    request = {"task": task, "workdir": cfg["workdir"], "role": "review", "minutes": 1, "verify": verify, "background": False}
     started = time.monotonic()
-    result = _remote_transport.invoke(cfg["host"], cfg["launcher"], request, REMOTE_TIMEOUT)  # never retried, even on UNKNOWN
+    result = _remote_transport.invoke(cfg["host"], cfg["launcher"], request,
+                                      REMOTE_VERIFY_TIMEOUT if verify else REMOTE_TIMEOUT)  # never retried, even on UNKNOWN
     _log(role="review", status=result.get("status", "ERROR") if isinstance(result, dict) else "ERROR",
          secs=round(time.monotonic() - started), remote=name)
     return json.dumps(result)
@@ -535,10 +538,12 @@ def _remote_approval(args):
     name = str(args.get("worker") or "")
     cfg = REMOTE_WORKERS.get(name, {"host": "not configured", "workdir": "not configured"})
     digest = hashlib.sha256(task.encode("utf-8", "replace")).hexdigest()[:12]
+    verifier = ("a verifier pass on that machine (can take up to 8 minutes)" if args.get("verify") is not False
+                else "the verifier off")
     # Destination first, task last: a long prompt is cut from the bottom, and the length + hash show whether the task was whole.
     return {"action": "approve", "rule_key": "gogogoogle:" + os.urandom(16).hex(), "message":
             f"REMOTE agy review on worker {name} (ssh {cfg['host']}), remote folder {cfg['workdir']}. "
-            "It runs on that machine's Antigravity account with the verifier off. agy's read-only rules are not a sandbox: "
+            f"It runs on that machine's Antigravity account with {verifier}. agy's read-only rules are not a sandbox: "
             "it can read files outside the remote folder on that machine; data goes to Google. "
             f"Task ({len(task)} chars, sha256 {digest}):\n{task}"}
 
@@ -594,9 +599,10 @@ def register(ctx):
         ctx.register_tool(name="antigravity_remote_review", toolset="gogogoogle", handler=remote_review, schema={
             "name": "antigravity_remote_review",
             "description": ("gogogoogle (experimental): ask Antigravity `agy` on another machine to REVIEW a folder there. "
-                            "Review only: no edits, no verifier. The folder, host and limits are fixed by the operator; "
+                            "Review only: no edits; a fresh verifier pass runs on the worker unless verify is false. The folder, host and limits are fixed by the operator; "
                             "Hermes asks the user to approve first. An UNKNOWN result means the work may still run: do not retry."),
             "parameters": {"type": "object", "properties": {
                 "task": {"type": "string", "description": f"What to review, at most {REMOTE_TASK_LIMIT} characters. agy has no memory of this chat."},
-                "worker": {"type": "string", "enum": list(REMOTE_WORKERS), "description": "Name of the configured remote worker."}},
+                "worker": {"type": "string", "enum": list(REMOTE_WORKERS), "description": "Name of the configured remote worker."},
+                "verify": {"type": "boolean", "description": "Run a fresh verifier pass on the worker. Default true; adds up to about 5 minutes."}},
                 "required": ["task", "worker"]}})

@@ -144,12 +144,22 @@ class SupervisorTests(unittest.TestCase):
         import remote_supervisor
         base = {'task': 'review', 'workdir': 'C:/fixture', 'role': 'review',
                 'minutes': 1, 'verify': False, 'background': False}
-        for changes in ({'role': 'do'}, {'verify': True}, {'resume': 'abc'},
+        for changes in ({'role': 'do'}, {'verify': True}, {'verify': 'yes'}, {'resume': 'abc'},
                         {'resume': ''}, {'background': True}, {'role': None},
                         {'minutes': 30}, {'deadline_seconds': 99999}):
             with self.subTest(changes=changes):
                 self.assertFalse(remote_supervisor.allowed_request({**base, **changes}, 120))
         self.assertTrue(remote_supervisor.allowed_request({**base, 'minutes': 1}, 120))
+
+    def test_verify_needs_the_longer_deadline(self):
+        import remote_supervisor
+        base = {'task': 'review', 'workdir': 'C:/fixture', 'role': 'review',
+                'minutes': 1, 'verify': True, 'background': False}
+        self.assertEqual(remote_supervisor.deadline_for({**base, 'verify': False}), 150)
+        self.assertEqual(remote_supervisor.deadline_for(base), 480)
+        self.assertEqual(remote_supervisor.deadline_for('not a dict'), 150)
+        self.assertTrue(remote_supervisor.allowed_request(base, 480))
+        self.assertFalse(remote_supervisor.allowed_request(base, 150))
 
     def test_assignment_failure_does_not_send_request(self):
         import remote_supervisor

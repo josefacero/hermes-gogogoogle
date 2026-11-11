@@ -96,7 +96,7 @@ def _serve(spool, request, cancel, request_id, approved, run, mode):
                     time.sleep(0.1)
             threading.Thread(target=watch_cancel, daemon=True).start()
             try:
-                result = run(parsed, remote_supervisor.WORKER_DEADLINE_SECONDS, disconnected)
+                result = run(parsed, remote_supervisor.deadline_for(parsed), disconnected)
             finally:
                 finished.set()
     except (ValueError, TypeError, RecursionError, OSError):

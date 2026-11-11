@@ -13,7 +13,7 @@ import threading
 import time
 
 LIMIT = 1024 * 1024
-WAIT_SECONDS = 180  # the worker deadline (150) plus its cleanup margin
+WAIT_SECONDS = 540  # the longest worker deadline (480, with the verifier pass) plus its cleanup margin
 UNKNOWN_NOTE = 'Work may still run or have completed; do not automatically retry.'
 
 

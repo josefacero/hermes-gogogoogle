@@ -11,6 +11,13 @@ import threading
 import time
 
 WORKER_DEADLINE_SECONDS = 150
+VERIFY_EXTRA_SECONDS = 330  # the plugin gives each verifier model 5 minutes; plus margin
+
+
+def deadline_for(request):
+    """Worker-owned deadline: 150 s, or 480 s when the request asks for the verifier pass."""
+    verify = isinstance(request, dict) and request.get('verify') is True
+    return WORKER_DEADLINE_SECONDS + (VERIFY_EXTRA_SECONDS if verify else 0)
 LIMIT = 1024 * 1024
 
 
@@ -145,10 +152,11 @@ def allowed_request(request, deadline_seconds):
             or set(request) - {'task', 'workdir', 'role', 'minutes', 'verify', 'background'}):
         return False
     minutes = request.get('minutes')
-    return (request.get('role') == 'review' and request.get('verify') is False
+    verify = request.get('verify')
+    return (request.get('role') == 'review' and type(verify) is bool
             and request.get('background', False) is False and 'resume' not in request
             and type(minutes) is int and minutes >= 1
-            and minutes * 60 + 60 <= deadline_seconds)
+            and minutes * 60 + 60 + (300 if verify else 0) <= deadline_seconds)
 
 
 def run_supervised(request, deadline_seconds, disconnected=None):
@@ -195,7 +203,7 @@ def main():
                 finally:
                     disconnected.set()
             threading.Thread(target=watch_connection, daemon=True).start()
-            result = run_supervised(request, WORKER_DEADLINE_SECONDS, disconnected)
+            result = run_supervised(request, deadline_for(request), disconnected)
     except (ValueError, TypeError, RecursionError):
         result = {'error': 'invalid request'}
     sys.stdout.write(json.dumps(result, ensure_ascii=True) + '\n')

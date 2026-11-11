@@ -119,11 +119,13 @@ class Adapter:
         if not isinstance(task, str) or not task.strip() or len(task.strip()) > REMOTE_TASK_LIMIT:
             raise Refused(f"task is required and must be at most {REMOTE_TASK_LIMIT} characters")
         cfg = self.remote_workers[name]
+        verify = args.get("verify", True) is not False  # default on, as for local requests
         request = {"task": task.strip(), "worker": name, "role": "review", "remote_host": cfg["host"],
-                   "remote_workdir": cfg["workdir"], "minutes": 1, "verify": False}
+                   "remote_workdir": cfg["workdir"], "minutes": 1, "verify": verify}
+        checked = "with a verifier pass on that machine (up to 8 minutes)" if verify else "with the verifier off"
         return request, (f"Runs agy review on remote worker {name} (ssh {cfg['host']}) in {cfg['workdir']} on that "
-                         "machine's Antigravity account; agy's read-only rules are not a sandbox, it can read files "
-                         "outside that folder there, and data goes to Google. This is not human approval.")
+                         f"machine's Antigravity account, {checked}; agy's read-only rules are not a sandbox, it can read "
+                         "files outside that folder there, and data goes to Google. This is not human approval.")
 
     def prepare(self, args):
         self._check()
@@ -172,7 +174,8 @@ class Adapter:
         if entry is None or entry[0] <= time.monotonic():
             raise Refused("invalid, expired, or already used token")
         if "worker" in entry[1]:  # remote: the backend fixes role, verify, minutes and the folder again
-            return self.backend.remote_review({"task": entry[1]["task"], "worker": entry[1]["worker"]})
+            return self.backend.remote_review({"task": entry[1]["task"], "worker": entry[1]["worker"],
+                                               "verify": entry[1]["verify"]})
         if self._workspace(entry[1]["workdir"]) != Path(entry[1]["workdir"]):
             raise Denied("prepared workspace changed")
         result = self.backend.delegate(entry[1])

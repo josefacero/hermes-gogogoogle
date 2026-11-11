@@ -65,7 +65,7 @@ class RemoteToolTests(unittest.TestCase):
 
     def test_tool_schema_has_only_task_and_worker(self):
         schema = self.register(remote_workers=WORKERS).tools['antigravity_remote_review']['schema']
-        self.assertEqual(sorted(schema['parameters']['properties']), ['task', 'worker'])
+        self.assertEqual(sorted(schema['parameters']['properties']), ['task', 'verify', 'worker'])
         self.assertEqual(schema['parameters']['properties']['worker']['enum'], ['worker-one'])
         self.assertEqual(sorted(schema['parameters']['required']), ['task', 'worker'])
 
@@ -82,18 +82,25 @@ class RemoteToolTests(unittest.TestCase):
         handler = self.configured()
         with patch.object(self.plugin._remote_transport, 'invoke', return_value={'status': 'OK'}) as invoke:
             self.assertEqual(json.loads(handler({'task': ' review calc.py ', 'worker': 'worker-one'})), {'status': 'OK'})
-        invoke.assert_called_once_with('gg-worker', 'C:/work/launch.cmd', {
-            'task': 'review calc.py', 'workdir': 'C:/work/fixture', 'role': 'review', 'minutes': 1,
-            'verify': False, 'background': False}, 200)
+            handler({'task': 'review calc.py', 'worker': 'worker-one', 'verify': False})
+        fixed = {'task': 'review calc.py', 'workdir': 'C:/work/fixture', 'role': 'review', 'minutes': 1, 'background': False}
+        self.assertEqual(invoke.call_args_list[0].args, ('gg-worker', 'C:/work/launch.cmd', {**fixed, 'verify': True}, 560))
+        self.assertEqual(invoke.call_args_list[1].args, ('gg-worker', 'C:/work/launch.cmd', {**fixed, 'verify': False}, 200))
+
+    def test_schema_offers_verify_defaulting_on(self):
+        props = self.register(remote_workers=WORKERS).tools['antigravity_remote_review']['schema']['parameters']['properties']
+        self.assertEqual(props['verify']['type'], 'boolean')
+        self.assertIn('Default true', props['verify']['description'])
 
     def test_model_cannot_change_workdir_role_or_minutes(self):
         handler = self.configured()
         with patch.object(self.plugin._remote_transport, 'invoke', return_value={'status': 'OK'}) as invoke:
             handler({'task': 't', 'worker': 'worker-one', 'workdir': 'C:/elsewhere', 'role': 'do', 'minutes': 30,
-                     'verify': True, 'background': True, 'resume': 'abc'})
+                     'verify': 'yes', 'background': True, 'resume': 'abc'})
         request = invoke.call_args.args[2]
+        # a non-boolean verify falls back to the default (on); only an explicit false turns it off
         self.assertEqual((request['workdir'], request['role'], request['minutes'], request['verify'],
-                          request['background'], 'resume' in request), ('C:/work/fixture', 'review', 1, False, False, False))
+                          request['background'], 'resume' in request), ('C:/work/fixture', 'review', 1, True, False, False))
 
     def test_unknown_result_is_returned_unchanged_and_called_once(self):
         handler = self.configured()
@@ -120,8 +127,10 @@ class RemoteToolTests(unittest.TestCase):
         message = first['message']
         self.assertEqual(first['action'], 'approve')
         self.assertTrue(message.startswith('REMOTE agy review on worker worker-one (ssh gg-worker), remote folder C:/work/fixture'))
-        for phrase in ("Antigravity account", 'verifier off', 'not a sandbox', 'outside the remote folder', 'Google'):
+        for phrase in ("Antigravity account", 'verifier pass on', 'not a sandbox', 'outside the remote folder', 'Google'):
             self.assertIn(phrase, message)
+        off = self.plugin._approval('antigravity_remote_review', {'task': task, 'worker': 'worker-one', 'verify': False})
+        self.assertIn('verifier off', off['message'])
         import hashlib
         digest = hashlib.sha256(task.encode()).hexdigest()[:12]
         self.assertTrue(message.endswith(f'Task ({len(task)} chars, sha256 {digest}):\n{task}'))

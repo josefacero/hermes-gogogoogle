@@ -185,10 +185,20 @@ class RelayInboxTests(unittest.TestCase):
         answer, seen = self.ask('approved task', mode='anything')
         self.assertEqual((answer, seen), ({'error': 'request refused by worker policy'}, []))
 
-    def test_supervisor_still_refuses_do_verify_and_resume_in_both_modes(self):
+    def test_verify_request_gets_the_longer_deadline(self):
+        deadlines = []
+
+        def run(request, deadline, disconnected):
+            deadlines.append(deadline)
+            return {'status': 'OK'}
+        self.ask('approved task', mode='lead-approved', run=run, verify=True)
+        self.ask('approved task', mode='lead-approved', run=run)
+        self.assertEqual(deadlines, [480, 150])
+
+    def test_supervisor_still_refuses_do_and_resume_in_both_modes(self):
         run = remote_inbox.remote_supervisor.run_supervised
         for mode in ('exact', 'lead-approved'):
-            for extra in ({'role': 'do'}, {'verify': True}, {'resume': 'abc'}):
+            for extra in ({'role': 'do'}, {'resume': 'abc'}):
                 answer, _ = self.ask('approved task', mode=mode, run=run, **extra)
                 self.assertEqual(answer, {'error': 'request refused by worker policy'}, (mode, extra))
 
