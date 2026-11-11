@@ -12,7 +12,7 @@ LIMIT = 1024 * 1024
 def execute(request, roots, allow_do, backend):
     if not isinstance(request, dict) or set(request) - {'task', 'workdir', 'role', 'minutes', 'verify', 'background', 'resume'}:
         return {'error': 'invalid request'}
-    task, workdir, role = request.get('task'), request.get('workdir'), request.get('role', 'do')
+    task, workdir, role = request.get('task'), request.get('workdir'), request.get('role')
     if (not isinstance(task, str) or not task.strip() or len(task) > 59000
             or not isinstance(workdir, str) or not Path(workdir).is_absolute()
             or role not in ('do', 'research', 'review') or (role == 'do' and not allow_do)
@@ -45,8 +45,10 @@ def main():
         backend.BROWSER_MODE = 'off'
         roots = [root for root in os.environ.get('GOGOGOOGLE_WORKER_ROOTS', '').split(os.pathsep) if root]
         result = execute(request, roots, os.environ.get('GOGOGOOGLE_WORKER_ALLOW_DO') == '1', backend)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         result = {'error': 'invalid request'}
+    except Exception:
+        result = {'status': 'UNKNOWN', 'error': 'worker failed'}
     sys.stdout.write(json.dumps(result, ensure_ascii=True) + '\n')
 
 

@@ -60,6 +60,16 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(json.loads(p.stdin.saved), {'message': 'hello; $(secret)'})
         self.assertTrue(p.waited)
 
+    def test_windows_runner_path_and_shell_metacharacters(self):
+        result, popen = self.call(Process(), path='C:/gogogoogle/runner.cmd')
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(popen.call_args.args[0][-1], 'C:/gogogoogle/runner.cmd')
+        for path in ('C:/gogogoogle/../runner.cmd', 'C:/gogogoogle/a&whoami.cmd',
+                     'C:/gogogoogle/a b.cmd', 'C:/gogogoogle/%TEMP%.cmd', 'C:runner.cmd'):
+            result, popen = self.call(Process(), path=path)
+            self.assertEqual(result, {'error': 'invalid runner path'})
+            popen.assert_not_called()
+
     def test_invalid_inputs_never_start_ssh(self):
         for host in ('-oProxyCommand=x', 'a b', 'host;id', 'user@-host', 'host..com', 'ssh://host', ''):
             with self.subTest(host=host):

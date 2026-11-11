@@ -8,7 +8,7 @@ import threading
 import time
 
 _HOST = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_.-]*@)?[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\Z")
-_PATH = re.compile(r"/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\Z")
+_PATH = re.compile(r"(?:[A-Za-z]:)?/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\Z")
 _STDOUT_LIMIT = 1024 * 1024
 _STDERR_LIMIT = 64 * 1024
 _REQUEST_LIMIT = 1024 * 1024
@@ -69,7 +69,7 @@ def invoke(host, runner_path, request, timeout):
     def write_request():
         try:
             process.stdin.write(payload)
-            process.stdin.close()
+            process.stdin.flush()
         except (OSError, ValueError):
             io_error.set()
 
@@ -103,5 +103,7 @@ def invoke(host, runner_path, request, timeout):
             if process.poll() is None:
                 process.kill()
             process.wait()
+            if not process.stdin.closed:
+                process.stdin.close()
         except OSError:
             return unknown("ssh cleanup failed")
