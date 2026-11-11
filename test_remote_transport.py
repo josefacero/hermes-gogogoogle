@@ -60,6 +60,20 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(json.loads(p.stdin.saved), {'message': 'hello; $(secret)'})
         self.assertTrue(p.waited)
 
+    def test_windows_uses_the_system_openssh_client(self):
+        # Hermes puts its bundled Git first on PATH; that ssh cannot reach the Windows ssh-agent.
+        with patch.object(transport.os, 'name', 'nt'), \
+             patch.dict(transport.os.environ, {'SystemRoot': 'C:\\Windows'}), \
+             patch.object(transport.os.path, 'isfile', return_value=True):
+            _, popen = self.call(Process())
+        self.assertEqual(popen.call_args.args[0][0], 'C:\\Windows\\System32\\OpenSSH\\ssh.exe')
+        with patch.object(transport.os, 'name', 'nt'), patch.object(transport.os.path, 'isfile', return_value=False):
+            _, popen = self.call(Process())
+        self.assertEqual(popen.call_args.args[0][0], 'ssh')
+        with patch.object(transport.os, 'name', 'posix'):
+            _, popen = self.call(Process())
+        self.assertEqual(popen.call_args.args[0][0], 'ssh')
+
     def test_windows_runner_path_and_shell_metacharacters(self):
         result, popen = self.call(Process(), path='C:/gogogoogle/runner.cmd')
         self.assertEqual(result, {'ok': True})

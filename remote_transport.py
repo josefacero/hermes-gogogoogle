@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import re
 import subprocess
 import threading
@@ -12,6 +13,15 @@ _PATH = re.compile(r"(?:[A-Za-z]:)?/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\Z")
 _STDOUT_LIMIT = 1024 * 1024
 _STDERR_LIMIT = 64 * 1024
 _REQUEST_LIMIT = 1024 * 1024
+
+
+def _ssh_client():
+    """Windows OpenSSH when present: an ssh found earlier on PATH (Hermes bundles Git's) cannot use the Windows ssh-agent."""
+    if os.name == "nt":
+        system = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "OpenSSH", "ssh.exe")
+        if os.path.isfile(system):
+            return system
+    return "ssh"
 
 
 def invoke(host, runner_path, request, timeout):
@@ -35,7 +45,7 @@ def invoke(host, runner_path, request, timeout):
     if len(payload) > _REQUEST_LIMIT:
         return {"error": "request too large"}
 
-    cmd = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+    cmd = [_ssh_client(), "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
            "-o", "ClearAllForwardings=yes", host, runner_path]
     try:
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
