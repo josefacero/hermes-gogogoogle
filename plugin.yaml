@@ -1,5 +1,5 @@
 name: gogogoogle
-version: 0.5.0
+version: 0.6.0
 description: "gogogoogle: hand bulk work to Google Antigravity (agy) as a worker, then have a fresh second model check it. Runs on your Antigravity quota, not your Hermes model's."
 author: Josef Acero
 requires_hermes: ">=0.22.0"
@@ -16,9 +16,13 @@ config_schema:
   browser_mode:
     type: str
     description: "How agy's browser runs for research, review and verifier passes: headless (default), visible, or off."
+  remote_workers:
+    type: dict
+    description: "Experimental. Named remote workers for antigravity_remote_review: name -> host, launcher, workdir. Unset means no remote tool."
 provides_hooks:
   - pre_tool_call
 provides_tools:
   - antigravity_delegate
   - antigravity_job
   - antigravity_stats
+  - antigravity_remote_review  # registered only when remote_workers is set

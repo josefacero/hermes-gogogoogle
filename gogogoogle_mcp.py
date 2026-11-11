@@ -20,6 +20,7 @@ from pathlib import Path
 CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i: a calling agent may retype the code
 CODE_LENGTH = 12
 CODE_SECONDS = 300
+REMOTE_TASK_LIMIT = 1000  # same limit as the Hermes tool and the worker's lead-approved mode
 
 
 class Refused(ValueError):
@@ -41,6 +42,22 @@ def parse_roots(value):
     return roots
 
 
+def configure_remote(backend, raw):
+    """Load GOGOGOOGLE_MCP_REMOTE_WORKERS (JSON, same shape as the Hermes setting) into the backend; empty means none."""
+    if not (raw or "").strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError("remote workers must be a JSON object") from None
+    workers = backend._remote_workers(value)  # raises ValueError on a bad shape
+    spec = importlib.util.spec_from_file_location("gogogoogle_remote_transport", Path(__file__).with_name("remote_transport.py"))
+    transport = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transport)
+    backend.REMOTE_WORKERS, backend._remote_transport = workers, transport
+    return workers
+
+
 def invoke(method, args):
     try:
         return method(args)
@@ -51,8 +68,9 @@ def invoke(method, args):
 
 
 class Adapter:
-    def __init__(self, backend, *, trusted=False, host=None, allowed_roots=None, allow_do=False):
+    def __init__(self, backend, *, trusted=False, host=None, allowed_roots=None, allow_do=False, remote_workers=None):
         self.backend = backend
+        self.remote_workers = remote_workers or {}  # name -> {host, launcher, workdir}; validated by configure_remote()
         self.trusted = trusted is True and isinstance(host, str) and bool(host.strip())
         self.host = host
         if not isinstance(allowed_roots, list) or not allowed_roots:
@@ -91,10 +109,31 @@ class Adapter:
             raise Denied("workspace or root is unavailable") from exc
         raise Denied("workspace is outside configured roots")
 
+    def _prepare_remote(self, args):
+        """Review-only request for an operator-configured worker; the remote folder, host and limits come from configuration."""
+        name, task, role = args.get("worker"), args.get("task"), args.get("role")
+        if not isinstance(name, str) or name not in self.remote_workers:
+            raise Denied("worker is not configured by the operator")
+        if role != "review":
+            raise Refused("a remote worker runs review only")
+        if not isinstance(task, str) or not task.strip() or len(task.strip()) > REMOTE_TASK_LIMIT:
+            raise Refused(f"task is required and must be at most {REMOTE_TASK_LIMIT} characters")
+        cfg = self.remote_workers[name]
+        verify = args.get("verify", True) is not False  # default on, as for local requests
+        request = {"task": task.strip(), "worker": name, "role": "review", "remote_host": cfg["host"],
+                   "remote_workdir": cfg["workdir"], "minutes": 1, "verify": verify}
+        checked = "with a verifier pass on that machine (up to 8 minutes)" if verify else "with the verifier off"
+        return request, (f"Runs agy review on remote worker {name} (ssh {cfg['host']}) in {cfg['workdir']} on that "
+                         f"machine's Antigravity account, {checked}; agy's read-only rules are not a sandbox, it can read "
+                         "files outside that folder there, and data goes to Google. This is not human approval.")
+
     def prepare(self, args):
         self._check()
-        if not isinstance(args, dict) or set(args) - {"task", "workdir", "role", "minutes", "verify", "background", "resume"}:
+        if not isinstance(args, dict) or set(args) - {"task", "workdir", "role", "minutes", "verify", "background", "resume", "worker"}:
             raise Refused("invalid request fields")
+        if args.get("worker"):
+            request, notice = self._prepare_remote(args)
+            return self._issue(request, notice, skip_permissions=False)
         if not isinstance(args.get("task"), str) or not args["task"].strip() or not isinstance(args.get("workdir"), str) or not args["workdir"].strip():
             raise Refused("task and workdir are required strings")
         role = args.get("role")  # required: no silent default to the privileged mode
@@ -111,6 +150,10 @@ class Adapter:
         workspace = self._workspace(args["workdir"])
         request = {"task": args["task"].strip(), "workdir": str(workspace), "role": role,
                    "minutes": minutes, "verify": verify, "background": background, "resume": resume}
+        return self._issue(request, "Local execution under trusted configuration; this is not human approval.",
+                           skip_permissions=role == "do")
+
+    def _issue(self, request, notice, skip_permissions):
         now = time.monotonic()
         with self._lock:
             self._pending = {key: value for key, value in self._pending.items() if value[0] > now}
@@ -118,9 +161,8 @@ class Adapter:
                 raise Refused("too many pending requests")
             token = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
             self._pending[token] = (now + CODE_SECONDS, request)
-        return {"request": request.copy(), "host_label": self.host, "skip_permissions": role == "do",
-                "expires_in_seconds": CODE_SECONDS, "token": token,
-                "notice": "Local execution under trusted configuration; this is not human approval."}
+        return {"request": request.copy(), "host_label": self.host, "skip_permissions": skip_permissions,
+                "expires_in_seconds": CODE_SECONDS, "token": token, "notice": notice}
 
     def delegate(self, token):
         self._check()
@@ -131,6 +173,9 @@ class Adapter:
             entry = self._pending.pop(token, None)
         if entry is None or entry[0] <= time.monotonic():
             raise Refused("invalid, expired, or already used token")
+        if "worker" in entry[1]:  # remote: the backend fixes role, verify, minutes and the folder again
+            return self.backend.remote_review({"task": entry[1]["task"], "worker": entry[1]["worker"],
+                                               "verify": entry[1]["verify"]})
         if self._workspace(entry[1]["workdir"]) != Path(entry[1]["workdir"]):
             raise Denied("prepared workspace changed")
         result = self.backend.delegate(entry[1])
@@ -177,14 +222,28 @@ def main():
     spec.loader.exec_module(backend)
     backend.BROWSER_MODE = "off"
     adapter.backend = backend
+    try:
+        adapter.remote_workers = configure_remote(backend, os.environ.get("GOGOGOOGLE_MCP_REMOTE_WORKERS"))
+    except ValueError:
+        raise SystemExit("gogogoogle MCP server not started: GOGOGOOGLE_MCP_REMOTE_WORKERS must be a JSON object mapping a "
+                         "worker name (a-z, 0-9, -) to host, launcher and workdir strings.") from None
     server = FastMCP("gogogoogle")
 
-    @server.tool()
-    def prepare(task: str, workdir: str, role: str, minutes: int = 10,
-                verify: bool = True, background: bool = False, resume: str = "") -> dict:
-        """Show a local request and issue a single-use code; this is not human approval. role: do, research or review."""
-        return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
-                                        "verify": verify, "background": background, "resume": resume})
+    if adapter.remote_workers:  # the tool's parameters change only for an operator who configured a remote worker
+        @server.tool()
+        def prepare(task: str, role: str, workdir: str = "", minutes: int = 10,
+                    verify: bool = True, background: bool = False, resume: str = "", worker: str = "") -> dict:
+            """Show a request and issue a single-use code; this is not human approval. role: do, research or review.
+            worker (experimental): name of an operator-configured remote worker; review only, its folder is fixed by the operator."""
+            return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
+                                            "verify": verify, "background": background, "resume": resume, "worker": worker})
+    else:
+        @server.tool()
+        def prepare(task: str, workdir: str, role: str, minutes: int = 10,
+                    verify: bool = True, background: bool = False, resume: str = "") -> dict:
+            """Show a local request and issue a single-use code; this is not human approval. role: do, research or review."""
+            return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
+                                            "verify": verify, "background": background, "resume": resume})
 
     @server.tool()
     def delegate(token: str) -> str | dict:

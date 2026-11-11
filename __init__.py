@@ -492,7 +492,65 @@ def stats(args, **kwargs):
                        "tokens_handled_by_agy": {"in": sum(r.get("tin", 0) for r in rows), "out": sum(r.get("tout", 0) for r in rows)}})
 
 
+REMOTE_WORKERS = {}  # name -> {host, launcher, workdir}; filled by register() from the operator's `remote_workers` setting
+REMOTE_TASK_LIMIT = 1000  # short enough to read whole in the approval prompt; the worker enforces the same limit in lead-approved mode
+REMOTE_TIMEOUT = 200  # the worker's own deadline is 150 s
+REMOTE_VERIFY_TIMEOUT = 560  # with the verifier pass the worker's deadline is 480 s, the relay waits 540 s
+_remote_transport = None  # loaded only when remote_workers is set, so a plain install never imports it
+
+
+def _remote_workers(value):
+    """Validate the `remote_workers` setting; empty or unset means no remote tool."""
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Invalid gogogoogle plugin settings: remote_workers must be an object")
+    for name, cfg in value.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]{1,32}", name) or not isinstance(cfg, dict)
+                or not all(isinstance(cfg.get(k), str) and cfg[k].strip() for k in ("host", "launcher", "workdir"))):
+            raise ValueError("Invalid gogogoogle plugin settings: each remote worker needs a name of 1 to 32 characters "
+                             "(a-z, 0-9, -) and host, launcher and workdir strings")
+    return {n: {k: c[k].strip() for k in ("host", "launcher", "workdir")} for n, c in value.items()}
+
+
+def remote_review(args, **kwargs):
+    """One review-only agy run on a configured worker. Request fields are fixed here; the model supplies task and worker."""
+    args = args if isinstance(args, dict) else {}
+    task, name = args.get("task"), args.get("worker")
+    task = task.strip() if isinstance(task, str) else ""
+    if not isinstance(name, str) or name not in REMOTE_WORKERS:
+        return json.dumps({"error": "worker must be one of " + ", ".join(REMOTE_WORKERS)})
+    if not task or len(task) > REMOTE_TASK_LIMIT:
+        return json.dumps({"error": f"task is required and must be at most {REMOTE_TASK_LIMIT} characters"})
+    cfg = REMOTE_WORKERS[name]
+    verify = args.get("verify") is not False  # as for local runs: only an explicit false skips the verifier
+    request = {"task": task, "workdir": cfg["workdir"], "role": "review", "minutes": 1, "verify": verify, "background": False}
+    started = time.monotonic()
+    result = _remote_transport.invoke(cfg["host"], cfg["launcher"], request,
+                                      REMOTE_VERIFY_TIMEOUT if verify else REMOTE_TIMEOUT)  # never retried, even on UNKNOWN
+    _log(role="review", status=result.get("status", "ERROR") if isinstance(result, dict) else "ERROR",
+         secs=round(time.monotonic() - started), remote=name)
+    return json.dumps(result)
+
+
+def _remote_approval(args):
+    task = str(args.get("task") or "").strip()  # what remote_review() sends
+    name = str(args.get("worker") or "")
+    cfg = REMOTE_WORKERS.get(name, {"host": "not configured", "workdir": "not configured"})
+    digest = hashlib.sha256(task.encode("utf-8", "replace")).hexdigest()[:12]
+    verifier = ("a verifier pass on that machine (can take up to 8 minutes)" if args.get("verify") is not False
+                else "the verifier off")
+    # Destination first, task last: a long prompt is cut from the bottom, and the length + hash show whether the task was whole.
+    return {"action": "approve", "rule_key": "gogogoogle:" + os.urandom(16).hex(), "message":
+            f"REMOTE agy review on worker {name} (ssh {cfg['host']}), remote folder {cfg['workdir']}. "
+            f"It runs on that machine's Antigravity account with {verifier}. agy's read-only rules are not a sandbox: "
+            "it can read files outside the remote folder on that machine; data goes to Google. "
+            f"Task ({len(task)} chars, sha256 {digest}):\n{task}"}
+
+
 def _approval(tool_name="", args=None, **kwargs):
+    if tool_name == "antigravity_remote_review":
+        return _remote_approval(args if isinstance(args, dict) else {})
     if tool_name != "antigravity_delegate":
         return None
     args = args if isinstance(args, dict) else {}
@@ -512,8 +570,10 @@ def _approval(tool_name="", args=None, **kwargs):
 
 
 def register(ctx):
-    global WORKER, VERIFIERS, BLOCKED, BROWSER_MODE
+    global WORKER, VERIFIERS, BLOCKED, BROWSER_MODE, REMOTE_WORKERS, _remote_transport
+    REMOTE_WORKERS = {}
     if hasattr(ctx, "get_config"):
+        REMOTE_WORKERS = _remote_workers(ctx.get_config("remote_workers", None))
         mode = ctx.get_config("browser_mode", BROWSER_MODE)
         if mode not in BROWSER_MODES:
             raise ValueError("Invalid gogogoogle plugin settings: browser_mode must be one of " + ", ".join(BROWSER_MODES))
@@ -532,3 +592,17 @@ def register(ctx):
     ctx.register_tool(name="antigravity_delegate", toolset="gogogoogle", schema=DELEGATE, handler=delegate)
     ctx.register_tool(name="antigravity_job", toolset="gogogoogle", schema=JOB, handler=job)
     ctx.register_tool(name="antigravity_stats", toolset="gogogoogle", schema=STATS, handler=stats)
+    if REMOTE_WORKERS:
+        spec = importlib.util.spec_from_file_location("gogogoogle_remote_transport", Path(__file__).with_name("remote_transport.py"))
+        _remote_transport = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_remote_transport)
+        ctx.register_tool(name="antigravity_remote_review", toolset="gogogoogle", handler=remote_review, schema={
+            "name": "antigravity_remote_review",
+            "description": ("gogogoogle (experimental): ask Antigravity `agy` on another machine to REVIEW a folder there. "
+                            "Review only: no edits; a fresh verifier pass runs on the worker unless verify is false. The folder, host and limits are fixed by the operator; "
+                            "Hermes asks the user to approve first. An UNKNOWN result means the work may still run, TIMED OUT that it was stopped at the worker's deadline: do not retry either."),
+            "parameters": {"type": "object", "properties": {
+                "task": {"type": "string", "description": f"What to review, at most {REMOTE_TASK_LIMIT} characters. agy has no memory of this chat."},
+                "worker": {"type": "string", "enum": list(REMOTE_WORKERS), "description": "Name of the configured remote worker."},
+                "verify": {"type": "boolean", "description": "Run a fresh verifier pass on the worker. Default true; adds up to about 5 minutes."}},
+                "required": ["task", "worker"]}})
