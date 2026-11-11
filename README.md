@@ -183,7 +183,7 @@ All on one Windows 11 machine with agy 1.5.3. Each real run is one run, not a ra
   - Codex (`codex exec`, auto-approve): `review` with the verifier on (all three bugs, no file changed, the code passed correctly first time); a `do` run that changed only the one file.
 - Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says "the job tool". The fix also passed two real headless Claude Code runs from a fresh clone: one background and one foreground.
 
-Interactive Codex and Claude Code review and do runs also passed on Windows. The Codex review and Claude Code do run showed a request for user approval; Claude Code was in auto mode. Interactive Claude Code review approval, a background job read from a second session with real agy, macOS, Linux, Docker and remote workers remain untested.
+Interactive Codex and Claude Code review and do runs also passed on Windows. The Codex review and Claude Code do run showed a request for user approval; Claude Code was in auto mode. The maintainer also ran an interactive Claude Code review by hand with real agy and saw the approval step (a report, not recorded evidence). A background job read from a second session with real agy, macOS, Linux, Docker and remote workers remain untested.
 
 One interactive Hermes background review also passed on Windows in an isolated profile: the job completed in that profile, its verifier passed, and the working tree stayed clean.
 
