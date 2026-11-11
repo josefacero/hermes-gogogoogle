@@ -142,18 +142,23 @@ class RelayInboxTests(unittest.TestCase):
         self.assertTrue((self.spool / 'inbox.lock').exists())
         self.assertFalse((self.spool / 'ready').exists())
 
-    def test_starting_inbox_keeps_a_fresh_answer_and_removes_an_old_one(self):
-        # a relay may still be reading the previous inbox's answer; only files past any relay's wait are stale
-        fresh, old = self.spool / f'response.{OTHER_ID}.json', self.spool / 'response.0123456789abcdef.json'
+    def test_starting_inbox_deletes_no_leftover_however_old(self):
+        # a relay may still be writing a request or reading the previous inbox's answer; age cannot prove otherwise
+        fresh, old = self.spool / f'response.{OTHER_ID}.json', self.spool / 'request.0123456789abcdef.tmp'
         for path in (fresh, old):
             path.write_text('{}')
-        long_ago = time.time() - remote_inbox.STALE_SECONDS - 5
-        os.utime(old, (long_ago, long_ago))
+        os.utime(old, (0, 0))
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
         thread.join(3)
         self.assertEqual(served, [False])
         self.assertTrue(fresh.exists())
-        self.assertFalse(old.exists())
+        self.assertTrue(old.exists())
+
+    def test_inbox_releases_its_lock_when_it_ends(self):
+        thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)
+        thread.join(3)
+        self.assertEqual(served, [False])
+        self.assertFalse((self.spool / 'inbox.lock').exists())
 
     def test_idle_inbox_closes_its_window_and_leaves_nothing(self):
         thread, served = self.start_inbox(lambda *a: {'status': 'OK'}, idle=0.3)

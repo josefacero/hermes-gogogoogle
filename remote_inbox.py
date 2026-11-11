@@ -17,7 +17,6 @@ import remote_supervisor
 
 LIMIT = 1024 * 1024
 LEAD_TASK_LIMIT = 1000  # short enough to read whole in the lead's approval prompt
-STALE_SECONDS = 600  # longer than any relay waits (540 s), so no live relay still wants a file this old
 REQUEST_WAIT_SECONDS = 2  # a relay writes the request before it claims, so this only covers a relay that died
 
 
@@ -48,12 +47,8 @@ def _serve_window(spool, idle_seconds, approved, run, mode):
     if ready.exists() or any(spool.glob('claimed.*')):
         raise SystemExit('another inbox or an unfinished claim is in the spool; remove the files by hand if it is stale')
     closed.unlink(missing_ok=True)
-    for stale in [*spool.glob('request.*'), *spool.glob('response.*'), *spool.glob('cancel.*')]:
-        try:  # a younger file may belong to a relay that is still writing its request or reading the last answer
-            if time.time() - stale.stat().st_mtime > STALE_SECONDS:
-                stale.unlink()
-        except OSError:
-            pass
+    # request.*, response.* and cancel.* leftovers stay: each carries a random id no new request reuses,
+    # and deleting them here could take a file a relay is still writing or reading
     ready.touch()
     until = time.monotonic() + idle_seconds
     claimed = None
