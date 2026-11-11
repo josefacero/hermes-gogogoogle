@@ -7,6 +7,7 @@ Policy comes from this process's environment (approved task, worker roots), neve
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -14,23 +15,55 @@ import time
 import remote_supervisor
 
 LIMIT = 1024 * 1024
+REQUEST_WAIT_SECONDS = 2  # a relay writes the request before it claims, so this only covers a relay that died
 
 
 def serve_one(spool, idle_seconds, approved, run=remote_supervisor.run_supervised):
     """Wait for one request, answer it, return True. False when none arrived in time."""
-    ready, request, response, cancel = (spool / name for name in ('ready', 'request.json', 'response.json', 'cancel'))
-    for stale in (request, response, cancel):
+    ready, closed = spool / 'ready', spool / 'closed'
+    if ready.exists() or any(spool.glob('claimed.*')):
+        raise SystemExit('another inbox or an unfinished claim is in the spool; remove the files by hand if it is stale')
+    for stale in [*spool.glob('request.*'), *spool.glob('response.*'), *spool.glob('cancel.*'), closed]:
         stale.unlink(missing_ok=True)
     ready.touch()
-    try:
-        until = time.monotonic() + idle_seconds
-        while not request.is_file():
-            if time.monotonic() >= until:
-                return False
+    until = time.monotonic() + idle_seconds
+    claimed = None
+    while claimed is None:
+        found = next(iter(spool.glob('claimed.*')), None)
+        if found is not None:
+            claimed = found
+        elif time.monotonic() >= until:
+            try:
+                os.rename(ready, closed)  # one request only: nothing can claim a closed window
+            except OSError:
+                continue  # a relay claimed it in the same instant: serve that claim
+            closed.unlink(missing_ok=True)
+            return False
+        else:
             time.sleep(0.1)
-    finally:
-        ready.unlink(missing_ok=True)  # one request only: a second relay call is refused
+    request_id = claimed.name.split('.', 1)[1]
+    request, response, cancel = (spool / f'{name}.{request_id}{ext}' for name, ext in (
+        ('request', '.json'), ('response', '.json'), ('cancel', '')))
     try:
+        result = _serve(spool, request, cancel, request_id, approved, run)
+        pending = spool / f'response.{request_id}.tmp'
+        pending.write_text(json.dumps(result, ensure_ascii=True), encoding='ascii')
+        os.replace(pending, response)
+    finally:
+        # the claim goes last: while it exists a second relay is told `busy`
+        for leftover in (request, cancel, claimed):
+            leftover.unlink(missing_ok=True)
+    return True
+
+
+def _serve(spool, request, cancel, request_id, approved, run):
+    """Read the claimed request and run it under policy; always returns the answer dict."""
+    until = time.monotonic() + REQUEST_WAIT_SECONDS
+    while not request.is_file() and time.monotonic() < until:
+        time.sleep(0.05)
+    try:
+        if not re.fullmatch('[0-9a-f]{16}', request_id) or not request.is_file():
+            raise ValueError('no request arrived for this claim')
         if request.stat().st_size > LIMIT:
             raise ValueError('request too large')
         data = request.read_bytes()
@@ -54,10 +87,7 @@ def serve_one(spool, idle_seconds, approved, run=remote_supervisor.run_supervise
                 finished.set()
     except (ValueError, TypeError, RecursionError, OSError):
         result = {'error': 'invalid request'}
-    pending = spool / 'response.tmp'
-    pending.write_text(json.dumps(result, ensure_ascii=True), encoding='ascii')
-    os.replace(pending, response)
-    return True
+    return result
 
 
 def main():

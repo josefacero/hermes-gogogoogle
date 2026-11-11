@@ -7,6 +7,7 @@ so agy cannot run here. This side only passes bytes across; policy, deadline and
 import json
 import os
 from pathlib import Path
+import secrets
 import sys
 import threading
 import time
@@ -18,16 +19,23 @@ UNKNOWN_NOTE = 'Work may still run or have completed; do not automatically retry
 
 def relay(data, spool, disconnected, wait_seconds=WAIT_SECONDS):
     """Queue one request and wait for its answer. None means the client went away."""
-    ready, request, response, cancel = (spool / name for name in ('ready', 'request.json', 'response.json', 'cancel'))
-    if not ready.is_file():
-        return {'error': 'worker inbox is not running'}
-    pending = spool / f'request.{os.getpid()}.tmp'
+    request_id = secrets.token_hex(8)  # only an answer carrying this id is ours
+    ready, claimed, request, response, cancel = (spool / name for name in (
+        'ready', f'claimed.{request_id}', f'request.{request_id}.json',
+        f'response.{request_id}.json', f'cancel.{request_id}'))
+    pending = spool / f'request.{request_id}.tmp'
     try:
-        pending.write_bytes(data)
-        os.rename(pending, request)  # atomic, and fails when a request is already queued
+        pending.write_bytes(data)  # written before the claim, so the inbox never waits on a slow write
+        os.rename(ready, claimed)  # atomic: one relay wins, the others find no `ready`
     except OSError:
         pending.unlink(missing_ok=True)
-        return {'error': 'worker inbox is busy'}
+        busy = any(spool.glob('claimed.*'))
+        return {'error': 'worker inbox is busy' if busy else 'worker inbox is not running'}
+    try:
+        os.rename(pending, request)
+    except OSError:
+        pending.unlink(missing_ok=True)
+        return {'status': 'UNKNOWN', 'error': 'relay failed', 'note': UNKNOWN_NOTE}
     until = time.monotonic() + wait_seconds
     while time.monotonic() < until and not disconnected.is_set():
         if response.is_file():
