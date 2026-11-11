@@ -102,40 +102,90 @@ When a model reports `Resets in 106h27m`, the plugin remembers that reset time a
 
 ## Use from Claude Code or Codex (experimental)
 
-`gogogoogle_mcp.py` is a stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It needs the optional `mcp` Python package (`pip install mcp`); the Hermes plugin itself stays standard-library only. The skill in `skills/gogogoogle/SKILL.md` tells the agent how to use it.
+`gogogoogle_mcp.py` is an experimental stdio MCP server over the same delegation engine, so a Claude Code or Codex session can hand work to `agy` without Hermes. It has been tested on Windows 11 only. The macOS and Linux lines below are untested.
 
-**The operator sets the policy, not the agent.** The server starts only with all of these environment variables, and the agent cannot change them:
+### 1. Get it
+
+```
+git clone https://github.com/josefacero/hermes-gogogoogle
+```
+
+You need Python 3.11 or newer, `agy` installed and signed in (see Setup below), and the optional `mcp` package installed for the same Python that will run the server: `<python> -m pip install mcp`, where `<python>` is the full path of that interpreter. The Hermes plugin itself stays standard-library only.
+
+### 2. Set the policy
+
+**The operator sets the policy, not the agent.** The server starts only with these environment variables, and the agent cannot change them. If one is wrong the server exits and its error names the variable.
 
 | Variable | Meaning |
 |---|---|
 | `GOGOGOOGLE_MCP_TRUSTED=1` | You accept that every client of this server may delegate within the policy below. |
 | `GOGOGOOGLE_MCP_HOST` | A label shown in each request (for example `my-laptop`). |
-| `GOGOGOOGLE_MCP_ALLOWED_ROOTS` | A JSON array of existing absolute folders; work outside them is refused. |
-| `GOGOGOOGLE_MCP_ALLOW_DO=1` | Optional. Without it only `research` and `review` run. With it, `do` runs agy with permission prompts skipped. |
+| `GOGOGOOGLE_MCP_ALLOWED_ROOTS` | Existing absolute project folders, as a JSON array or as a list separated by `;` on Windows (`:` on macOS and Linux). `workdir` must be inside one of them. A drive root or your home folder is refused. |
+| `GOGOGOOGLE_MCP_ALLOW_DO=1` | Optional. Without it only `research` and `review` run. With it, `do` runs agy with its permission prompts skipped. |
 
-Delegating takes two calls: `prepare` returns the exact request and a single-use token (valid 2 minutes), `delegate(token)` runs it. **This is not Hermes' approval.** Hermes asks a person before each call; here the person is whoever answers the host's tool prompt, and a host set to auto-approve skips that. Browser tools for agy are off on this path.
+The allowed roots decide where agy starts. **They are not containment:** agy can read files outside them by absolute path, and in `do` it can change files and run commands anywhere your user account can. The read-only roles still send what they read to Google.
 
-Claude Code (user scope):
+### 3. Add the server
 
-```bash
-claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-laptop -e 'GOGOGOOGLE_MCP_ALLOWED_ROOTS=["/home/me/projects"]' -- python /path/to/hermes-gogogoogle/gogogoogle_mcp.py
+Claude Code, in PowerShell (one line; use your own paths):
+
+```
+claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-pc -e "GOGOGOOGLE_MCP_ALLOWED_ROOTS=C:\Users\me\projects" '--' "C:\path\to\python.exe" "C:\path\to\hermes-gogogoogle\gogogoogle_mcp.py"
 ```
 
-Codex (`~/.codex/config.toml`). Tested with `codex exec` and a fake `agy`, using these keys passed as `-c` overrides rather than a config file. Non-interactive `codex exec` runs with approval policy "never", so it blocks every MCP call (`MCP tool call requires approval`) unless the server also sets `default_tools_approval_mode = "approve"`. That setting auto-approves `prepare` and `delegate`, so with it Codex shows no approval prompt and the skill's "show the user the request" step is the only check:
+Keep the quotes around `'--'`: when `claude` is installed through npm, PowerShell runs it as a script and drops a bare `--`, and the command fails with `missing required argument 'commandOrUrl'`. Then run `claude mcp list`. It must show `gogogoogle` as connected. If it shows a failure, run the server command by hand with the same variables set to read the error.
+
+Claude Code on macOS or Linux (untested):
+
+```bash
+claude mcp add gogogoogle --scope user -e GOGOGOOGLE_MCP_TRUSTED=1 -e GOGOGOOGLE_MCP_HOST=my-laptop -e GOGOGOOGLE_MCP_ALLOWED_ROOTS=/home/me/projects -- python3 /path/to/hermes-gogogoogle/gogogoogle_mcp.py
+```
+
+Codex (`~/.codex/config.toml`). Single quotes keep Windows backslashes literal:
 
 ```toml
 [mcp_servers.gogogoogle]
-command = "python"
-args = ["/path/to/hermes-gogogoogle/gogogoogle_mcp.py"]
-# default_tools_approval_mode = "approve"   # needed for `codex exec`; read the note above first
+command = 'C:\path\to\python.exe'
+args = ['C:\path\to\hermes-gogogoogle\gogogoogle_mcp.py']
+# default_tools_approval_mode = "approve"   # needed for `codex exec`; read the note below first
 
 [mcp_servers.gogogoogle.env]
 GOGOGOOGLE_MCP_TRUSTED = "1"
-GOGOGOOGLE_MCP_HOST = "my-laptop"
-GOGOGOOGLE_MCP_ALLOWED_ROOTS = '["/home/me/projects"]'
+GOGOGOOGLE_MCP_HOST = "my-pc"
+GOGOGOOGLE_MCP_ALLOWED_ROOTS = 'C:\Users\me\projects'
 ```
 
-What has been tested: `test_mcp_e2e.py` drives the server with a real MCP client against a fake `agy` (no quota), and one Claude Code session and one Codex session (`codex exec`) each ran `prepare` then `delegate` against it. One real `agy` review (gemini-3.8-flash-high, 43 s, verify off) ran once through the Claude Code path on a 10-line file and returned plausible findings with correct line numbers. That is one run, not a quality measurement. What has not been tested: other hosts, an interactive Codex session, a real `agy` run from Codex, the `do` role and background jobs with real `agy`, Docker, and remote workers. The SSH files (`remote_runner.py`, `remote_transport.py`) are prototypes, not connected to Hermes or MCP.
+Non-interactive `codex exec` runs with approval policy "never", so it blocks every MCP call (`MCP tool call requires approval`) unless the server also sets `default_tools_approval_mode = "approve"`. That setting auto-approves `prepare` and `delegate`, so no person sees the request before it runs.
+
+### 4. Install the skill
+
+The skill tells the agent how to brief the worker and how to check the result. Copy the folder `skills\gogogoogle` from the clone to `%USERPROFILE%\.claude\skills\gogogoogle` for Claude Code, or to `%USERPROFILE%\.agents\skills\gogogoogle` for Codex. Then say "use gogogoogle to review <file>".
+
+### How a run goes, and its limits
+
+- Delegating takes two calls. `prepare` returns the exact request and a single-use 12-character code, valid 5 minutes. `delegate` runs that request. The host's prompt for `prepare` shows the task, folder and role; its prompt for `delegate` shows only the code.
+- **This is not Hermes' approval.** Hermes asks a person before each call. Here the person is whoever answers the host's tool prompt, and a host set to auto-approve skips that. `GOGOGOOGLE_MCP_ALLOW_DO=1` together with an auto-approving host runs agy unattended with its permission prompts skipped; do not leave that combination running on work you have not read.
+- A foreground run holds the tool call for up to `minutes` (default 10) plus verification. If your host ends tool calls sooner, lower `minutes`. One Codex call ended at Codex's 300-second limit in testing.
+- `background=true` returns a job id; poll with `job`. Jobs live in the server process: after the host restarts the server, a job that was still running reads `UNKNOWN`.
+- Browser tools for agy are off on this path.
+
+### What has been tested
+
+All on one Windows 11 machine with agy 1.5.3. Each real run is one run, not a rate.
+
+- 92 automated tests, including a real MCP client driving the server against a fake `agy` (no quota): tool list, `review`, `do` refused and allowed, a background job polled to its result, a job from another server process.
+- Real agy, Claude Code (`claude -p`): one `do` run that made an image file, passed.
+- Real agy, Codex (`codex exec`, auto-approve): one `do` image run passed on the fourth attempt. One earlier attempt ended at Codex's 300-second tool limit, one was a test-script bug, and in one Codex retyped the then 43-character code wrongly twice. The code is now 12 characters and tolerates quotes, spaces and capitals.
+- Real agy, Codex: one read-only `review` of a 14-line file found the three planted bugs with correct line numbers and changed no files.
+- The three real runs above had `verify` off and used the earlier 43-character code.
+- Real agy on the tag `mcp-preview-1` (12-character code, required `role`), headless, a 14-line file with three planted bugs, one attempt each, all passed:
+  - Claude Code (`claude -p`): `review` with the verifier on (found all three bugs, a verifier from another model family ran, no file changed); a background `review` polled with `job` to its result in the same session; a `review` limited to one minute that timed out and returned a conversation id; a `resume` with that id that ended OK (its result was not read in full); a `do` run that changed only the one file.
+  - Codex (`codex exec`, auto-approve): `review` with the verifier on (all three bugs, no file changed, the code passed correctly first time); a `do` run that changed only the one file.
+- Those runs showed a background reply naming the Hermes tool `antigravity_job`; it now says "the job tool". The fix also passed two real headless Claude Code runs from a fresh clone: one background and one foreground.
+
+Interactive Codex and Claude Code review and do runs also passed on Windows. The Codex review and Claude Code do run showed a request for user approval; Claude Code was in auto mode. The maintainer also ran an interactive Claude Code review by hand with real agy and saw the approval step (a report, not recorded evidence). A background job read from a second session with real agy, macOS, Linux, Docker and remote workers remain untested.
+
+One interactive Hermes background review also passed on Windows in an isolated profile: the job completed in that profile, its verifier passed, and the working tree stayed clean.
 
 ## Setup
 
