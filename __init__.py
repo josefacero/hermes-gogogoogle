@@ -362,6 +362,11 @@ def _item_check(task, report):
             "note": "Tags show coverage only; they do not prove the work or claims are correct."}
 
 
+def _clip(text, limit=6000):
+    """A verifier report for the reply; a cut is marked so a reader does not mistake a cut for the report's end."""
+    return text if len(text) <= limit else text[:limit] + f"\n[verifier report cut at {limit:,} of {len(text):,} characters]"
+
+
 def _verify(task, answer, cwd, diff="", web=False):
     """web: verifying a web-research reply; the verifier may then fetch pages (agy permissions skipped, like the worker)."""
     brief = ("You are an independent verifier. Another agent was given this task and replied below. Check the claims against "
@@ -385,10 +390,10 @@ def _verify(task, answer, cwd, diff="", web=False):
             verdicts = re.findall(r"(?im)^VERDICT:[ \t]*(PASS|FAIL)[ \t]*$", text)
             first = text.strip().splitlines()[0].strip() if text.strip() else ""
             if len(verdicts) != 1 or first.upper() != f"VERDICT: {verdicts[0].upper()}":
-                return f"VERIFY INCONCLUSIVE ({m}): verifier did not return one valid first-line verdict\n{text[:1500]}"
+                return f"VERIFY INCONCLUSIVE ({m}): verifier did not return one valid first-line verdict\n{_clip(text)}"
             if verdicts[0].upper() == "PASS" and "[gogogoogle] agy permission rules blocked:" in text:
-                return f"VERIFY INCOMPLETE ({m}): verifier had blocked actions\n{text[:1500]}"
-            return f"VERIFY {verdicts[0].upper()} ({m})\n{text[:1500]}"
+                return f"VERIFY INCOMPLETE ({m}): verifier had blocked actions\n{_clip(text)}"
+            return f"VERIFY {verdicts[0].upper()} ({m})\n{_clip(text)}"
         if kind not in ("quota", "model", "auth", "busy"):
             return f"VERIFY SKIPPED: {m} {status}: {text[:300]}"
     return "VERIFY SKIPPED: no verifier model answered"

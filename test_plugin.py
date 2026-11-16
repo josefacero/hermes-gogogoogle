@@ -420,6 +420,15 @@ class PluginTests(unittest.TestCase):
             self.assertTrue(agy.call_args.kwargs["allow_edits"])
             self.assertIn("Discordbot/2.0", agy.call_args.args[0])
 
+    def test_long_verifier_report_is_kept_and_a_cut_is_marked(self):
+        # a 1,500-character silent cut once ended a demo's verifier report mid-list
+        long = "VERDICT: PASS\n" + "x" * 5000
+        with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "_agy", return_value=("OK", long, "", "", {})):
+            self.assertIn(long, plugin._verify("t", "a", "."))
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\n" + "y" * 9000, "", "", {})):
+            self.assertIn("[verifier report cut at 6,000 of 9,014 characters]", plugin._verify("t", "a", "."))
+
     def test_item_tags_at_either_end_of_the_item_line_count(self):
         task = "GOAL\n1. a\n2. b\n3. c\n"
         for report in ("1. **Item 1: a (DONE)**\n2. **Item 2: b (DONE)**\n3. **Item 3: c (UNVERIFIED)**",
