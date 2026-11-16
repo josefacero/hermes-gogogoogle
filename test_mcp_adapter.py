@@ -137,6 +137,15 @@ class AdapterTests(unittest.TestCase):
             self.adapter.prepare(request)
         self.assertEqual([], self.backend.calls)
 
+    def test_web_research_is_opt_in_and_shown_before_running(self):
+        research = dict(self.request, role="research")
+        self.assertFalse(self.adapter.prepare(research)["skip_permissions"])
+        web = self.module.Adapter(self.backend, trusted=True, host="h", allowed_roots=[str(self.module.Path.cwd())], web_research=True)
+        prep = web.prepare(research)
+        self.assertTrue(prep["skip_permissions"])
+        self.assertIn("permission prompts skipped", prep["notice"])
+        self.assertFalse(web.prepare(dict(self.request, role="review"))["skip_permissions"])  # review never gets it
+
     def test_drive_root_and_home_are_refused_as_roots(self):
         for root in (self.module.Path.cwd().anchor, str(self.module.Path.home())):
             with self.assertRaises(ValueError):

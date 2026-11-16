@@ -68,7 +68,8 @@ def invoke(method, args):
 
 
 class Adapter:
-    def __init__(self, backend, *, trusted=False, host=None, allowed_roots=None, allow_do=False, remote_workers=None):
+    def __init__(self, backend, *, trusted=False, host=None, allowed_roots=None, allow_do=False, remote_workers=None,
+                 web_research=False):
         self.backend = backend
         self.remote_workers = remote_workers or {}  # name -> {host, launcher, workdir}; validated by configure_remote()
         self.trusted = trusted is True and isinstance(host, str) and bool(host.strip())
@@ -90,6 +91,7 @@ class Adapter:
                 raise ValueError("workspace root is a drive root or the home folder")
             self.roots.append(path)
         self.allow_do = allow_do is True
+        self.web_research = web_research is True
         self._pending = {}
         self._lock = threading.Lock()
 
@@ -150,8 +152,13 @@ class Adapter:
         workspace = self._workspace(args["workdir"])
         request = {"task": args["task"].strip(), "workdir": str(workspace), "role": role,
                    "minutes": minutes, "verify": verify, "background": background, "resume": resume}
-        return self._issue(request, "Local execution under trusted configuration; this is not human approval.",
-                           skip_permissions=role == "do")
+        web = role == "research" and self.web_research
+        notice = "Local execution under trusted configuration; this is not human approval."
+        if web:
+            notice += (" Web research is on: agy runs with its permission prompts skipped so it can fetch pages with curl or "
+                       "Python. It is told not to change files, but nothing enforces that; file changes are reported. A fetched page can "
+                       "try to instruct it to run commands, so use a folder you can restore.")
+        return self._issue(request, notice, skip_permissions=role == "do" or web)
 
     def _issue(self, request, notice, skip_permissions):
         now = time.monotonic()
@@ -203,7 +210,8 @@ def main():
         raise SystemExit("gogogoogle MCP server not started: set GOGOGOOGLE_MCP_HOST to a label for this machine, such as my-laptop.")
     try:
         adapter = Adapter(None, trusted=trusted, host=host, allowed_roots=parse_roots(os.environ.get("GOGOGOOGLE_MCP_ALLOWED_ROOTS")),
-                          allow_do=os.environ.get("GOGOGOOGLE_MCP_ALLOW_DO") == "1")
+                          allow_do=os.environ.get("GOGOGOOGLE_MCP_ALLOW_DO") == "1",
+                          web_research=os.environ.get("GOGOGOOGLE_MCP_WEB_RESEARCH") == "1")
     except (ValueError, TypeError) as exc:  # Adapter's messages are fixed text and carry no path
         raise SystemExit(f"gogogoogle MCP server not started: GOGOGOOGLE_MCP_ALLOWED_ROOTS is not usable ({exc}). Set it to existing "
                          f"absolute project folders, as a JSON array or separated by '{os.pathsep}'. "
@@ -221,6 +229,7 @@ def main():
     backend = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend)
     backend.BROWSER_MODE = "off"
+    backend.WEB_RESEARCH = adapter.web_research
     adapter.backend = backend
     try:
         adapter.remote_workers = configure_remote(backend, os.environ.get("GOGOGOOGLE_MCP_REMOTE_WORKERS"))

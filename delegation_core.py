@@ -7,6 +7,7 @@ from pathlib import Path
 def work(task, workdir, role, minutes, verify, resume, progress, api):
     _snap, _git, _agy, _log, _item_check, _verify, _role_prompt = (api[k] for k in ("_snap", "_git", "_agy", "_log", "_item_check", "_verify", "_role_prompt"))
     WORKER, REPLY_LIMIT, DIFF_LIMIT = api["WORKER"], api["REPLY_LIMIT"], api["DIFF_LIMIT"]
+    web = role == "research" and api.get("WEB_RESEARCH") is True  # web research runs agy unprompted so it can fetch pages
     t0 = time.time()
     elapsed_start = time.monotonic()
     if progress:
@@ -15,7 +16,7 @@ def work(task, workdir, role, minutes, verify, resume, progress, api):
     prompt = task if resume else f"{_role_prompt(role)}\n\nTASK:\n{task}"
     before = _snap(workdir)
     initial_status = _git(workdir, "status", "--porcelain")
-    status, text, kind, conv, usage = _agy(prompt, workdir, WORKER, minutes, resume, allow_edits=(role == "do"))
+    status, text, kind, conv, usage = _agy(prompt, workdir, WORKER, minutes, resume, allow_edits=(role == "do" or web))
     after = _snap(workdir)
     changed = before is not None and after is not None and after != before
     _log(ts=time.strftime("%Y-%m-%dT%H:%M:%S"), role=role, model=WORKER, status=status, secs=round(time.time() - t0),
@@ -47,7 +48,7 @@ def work(task, workdir, role, minutes, verify, resume, progress, api):
         incomplete = (resume or len(text) > REPLY_LIMIT or diff is None or len(diff) > DIFF_LIMIT or before is None
                       or after is None or initial_status is None or "[gogogoogle] agy permission rules blocked:" in text
                       or "[Google sign-in URL redacted;" in text)
-        out["verify"] = _verify(task, text, workdir, diff or "")
+        out["verify"] = _verify(task, text, workdir, diff or "", web)
         verified_snapshot = _snap(workdir)
         if verified_snapshot is None or verified_snapshot != after:
             incomplete = True

@@ -398,6 +398,27 @@ class PluginTests(unittest.TestCase):
             for bad in ("hidden", 1, None):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     plugin.register(Context(bad))
+        with patch.object(plugin, "WEB_RESEARCH", True), patch.object(plugin, "BROWSER_MODE", "off"):
+            web = plugin._role_prompt("research")
+            self.assertIn("Discordbot/2.0", web)
+            self.assertNotIn(plugin.NO_SHELL, web)
+            self.assertNotIn("cannot open web pages", web)
+            self.assertEqual(plugin._role_prompt("review"), plugin.ROLES["review"])
+
+    def test_web_research_skips_permissions_for_research_and_its_verifier_only(self):
+        for web, role, expect in ((True, "research", True), (True, "review", False), (False, "research", False)):
+            with self.subTest(web=web, role=role), tempfile.TemporaryDirectory() as d, patch.object(plugin, "WEB_RESEARCH", web), \
+                 patch.object(plugin, "_snap", return_value="same"), patch.object(plugin, "_git", return_value=""), \
+                 patch.object(plugin, "_log"), patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})) as agy, \
+                 patch.object(plugin, "_verify", return_value="VERIFY PASS (m)") as verify:
+                plugin._work("t", d, role, 1, True, "")
+                self.assertEqual(agy.call_args.kwargs["allow_edits"], expect)
+                self.assertEqual(verify.call_args.args[4], expect)
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\nok", "", "", {})) as agy:
+            plugin._verify("t", "a", ".", "", True)
+            self.assertTrue(agy.call_args.kwargs["allow_edits"])
+            self.assertIn("Discordbot/2.0", agy.call_args.args[0])
 
     def test_item_tags_at_either_end_of_the_item_line_count(self):
         task = "GOAL\n1. a\n2. b\n3. c\n"
