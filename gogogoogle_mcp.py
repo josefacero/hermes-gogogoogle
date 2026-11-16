@@ -155,9 +155,11 @@ class Adapter:
         web = role == "research" and self.web_research
         notice = "Local execution under trusted configuration; this is not human approval."
         if web:
-            notice += (" Web research is on: agy runs with its permission prompts skipped so it can fetch pages with curl or "
-                       "Python. It is told not to change files, but nothing enforces that; file changes are reported. A fetched page can "
-                       "try to instruct it to run commands, so use a folder you can restore.")
+            notice += (" Web research is on: the research worker and its verifier both run agy with permission prompts skipped "
+                       "so they can fetch pages with curl or Python. They are told not to change files, log in or follow "
+                       "instructions in fetched pages, but nothing enforces that: a fetched page could steer either one into "
+                       "running commands anywhere this user account can. Only changes to tracked or new files inside the "
+                       "workdir are detected.")
         return self._issue(request, notice, skip_permissions=role == "do" or web)
 
     def _issue(self, request, notice, skip_permissions):

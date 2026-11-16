@@ -145,6 +145,26 @@ class McpEndToEnd(unittest.TestCase):
         self.assertEqual(res["status"], "OK")
         self.assertIn("--dangerously-skip-permissions", sum(self._argv_log(), []))
 
+    def test_web_research_env_switch_reaches_agy_only_when_exactly_1_and_only_for_research(self):
+        skip = "--dangerously-skip-permissions"
+        for value, role, expect in (("1", "research", True), ("1", "review", False), ("true", "research", False), (None, "research", False)):
+            with self.subTest(value=value, role=role):
+                log = self.bin / "argv.log"
+                if log.exists():
+                    log.unlink()
+                extra = {} if value is None else {"GOGOGOOGLE_MCP_WEB_RESEARCH": value}
+                async def go():
+                    async with self._session(extra=extra) as s:
+                        prep = _payload(await s.call_tool("prepare", {"task": "look", "workdir": str(self.work), "role": role}))
+                        await s.call_tool("delegate", {"token": prep["token"]})
+                        return prep
+                prep = asyncio.run(go())
+                self.assertEqual(prep["skip_permissions"], expect)
+                self.assertEqual("Web research is on" in prep["notice"], expect)
+                calls = self._argv_log()
+                self.assertGreaterEqual(len(calls), 2)  # the worker, then at least one verifier
+                self.assertEqual([skip in argv for argv in calls], [expect] * len(calls))
+
     def test_workspace_outside_the_roots_never_reaches_agy(self):
         async def go():
             async with self._session() as s:
