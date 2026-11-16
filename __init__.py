@@ -40,7 +40,8 @@ SAFE_BROWSER_TOOLS = ("browser_navigate", "browser_navigate_back", "browser_snap
 CREDENTIAL_DIRS = (".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gcloud", ".gemini")
 # Verifier chain: first model that answers wins. Override with a comma list; names come from `agy models`.
 VERIFIERS = [m.strip() for m in os.environ.get(
-    "ANTIGRAVITY_VERIFIER_MODELS", "claude-sonnet-5-5-low,gemini-4-argon-high,gemini-3.8-flash-high").split(",") if m.strip()]
+    "ANTIGRAVITY_VERIFIER_MODELS",
+    "claude-sonnet-5-5-low,gpt-oss-120b-medium,gemini-4-argon-high,gemini-3.8-flash-high").split(",") if m.strip()]
 BLOCKED = [Path(p).expanduser().resolve() for p in os.environ.get("GOGOGOOGLE_BLOCKED_ROOTS", "").split(os.pathsep) if p.strip()]
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PROCESS_ID = os.urandom(16).hex()

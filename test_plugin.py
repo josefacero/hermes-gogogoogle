@@ -675,6 +675,16 @@ class PluginTests(unittest.TestCase):
         with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "_agy", side_effect=replies):
             self.assertTrue(plugin._verify("t", "a", ".").startswith("VERIFY PASS"))
 
+    def test_default_chain_tries_a_second_non_gemini_verifier_before_the_workers_family(self):
+        self.assertEqual(plugin.VERIFIERS[:2], ["claude-sonnet-5-5-low", "gpt-oss-120b-medium"])
+        replies = [("FAILED", "quota exhausted", "quota", "", {}), ("OK", "VERDICT: PASS\nok", "", "", {})]
+        with patch.object(plugin, "_cooling", return_value={}), patch.object(plugin, "_agy", side_effect=replies) as agy:
+            self.assertTrue(plugin._verify("t", "a", ".").startswith("VERIFY PASS (gpt-oss-120b-medium)"))
+            self.assertEqual(agy.call_count, 2)
+        with patch.object(plugin, "_cooling", return_value={}), \
+             patch.object(plugin, "_agy", return_value=("FAILED", "quota exhausted", "quota", "", {})):
+            self.assertEqual(plugin._verify("t", "a", "."), "VERIFY SKIPPED: no verifier model answered")
+
     def test_plain_not_found_is_not_a_model_error(self):
         texts = ["Error: workspace file not found", "command not found: git", "models/gemini-9 is not found for API version v1",
                  "unknown model foo", "429 quota exceeded"]
