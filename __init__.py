@@ -186,7 +186,7 @@ def _mcp_servers():
     agy, names = shutil.which("agy"), None
     if agy:
         try:
-            r = subprocess.run([agy, "mcp", "list"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+            r = subprocess.run([agy, "mcp", "list"], stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                timeout=20, creationflags=NOWIN, env=_child_env())
             rows = [ln.split()[0] for ln in r.stdout.splitlines() if ln.strip()]
             if r.returncode == 0 and rows and rows[0] == "NAME" and all(re.fullmatch(r"[A-Za-z0-9_.-]+", n) for n in rows[1:]):
@@ -223,7 +223,7 @@ def _kill_tree(p):
     """Kill agy and what it started. A browser or shell that outlives agy keeps its output pipes open, and communicate() then waits on it."""
     if os.name == "nt":
         try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, timeout=10, creationflags=NOWIN)
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10, creationflags=NOWIN)
         except (OSError, subprocess.TimeoutExpired):
             pass  # falls back to killing agy alone
     p.kill()  # shortcut: no tree kill off Windows; the bounded wait in _agy still ends the call, add killpg if POSIX hangs show up
@@ -308,8 +308,9 @@ def _agy(prompt, cwd, model, minutes, resume="", allow_edits=False):
 def _git(cwd, *a):
     """stdout of a git command, or None when cwd is not a repo or git is missing."""
     try:
-        r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=30, creationflags=NOWIN, env=_child_env())
+        # stdin=DEVNULL: an inherited MCP stdio pipe can stall git's startup on Windows until the timeout
+        r = subprocess.run(["git", *a], cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=30, creationflags=NOWIN, env=_child_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:

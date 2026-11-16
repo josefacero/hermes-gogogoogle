@@ -412,6 +412,8 @@ class PluginTests(unittest.TestCase):
             run.return_value.stdout = ""
             plugin._git(".", "status")
             self.assertEqual(run.call_args.kwargs["env"], plugin._child_env())
+            # an inherited MCP stdio pipe stalled git for its whole timeout on Windows with MCP SDK 1.x
+            self.assertIs(run.call_args.kwargs["stdin"], plugin.subprocess.DEVNULL)
 
     def test_empty_response_with_denied_actions_is_failure(self):
         class Proc:
