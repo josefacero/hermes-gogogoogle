@@ -94,7 +94,7 @@ Run each step and check its result before the next one.
 
 1. **Antigravity CLI.** `agy --version` prints a version (tested on 1.5.2). If the command is missing, install Antigravity and run `agy` once to sign in.
 2. **Plugin.** `hermes plugins install josefacero/hermes-gogogoogle` then `hermes plugins enable gogogoogle`. Check: `hermes plugins list` shows `gogogoogle` enabled. Start a new Hermes session (restart the gateway if you use one).
-3. **Browser, optional but recommended for research.** `agy mcp list` should show a server named exactly `playwright`. If it does not, add it (flags go before the name): `agy mcp add playwright npx -y @playwright/mcp@0.0.84`. It needs Node.js (`npx`) and Google Chrome. Without it, research still works through agy's web search and page-reading tools.
+3. **Browser, optional but recommended for research.** `agy mcp list` should show a server named exactly `playwright`. If it does not, add it (flags go before the name): `agy mcp add playwright npx -y @playwright/mcp@0.0.84`. It needs Node.js (`npx`) and Google Chrome. Without it, research has only agy's web search, which returns search-engine summaries rather than the pages themselves (agy 1.5.9's page-reading tool was not called in our headless runs).
 4. **Protect your folders.** Add anything private to `blocked_roots` (see below). Credential folders in your home folder are blocked already.
 5. **Try it.** Ask Hermes: "Use gogogoogle to research <a question that needs a web page>". Hermes asks you to approve; allow once. The reply should end with a verifier line (`VERIFY PASS`, `LIMITED`, `INCOMPLETE` or `SKIPPED`) and no browser window should appear.
 
@@ -167,7 +167,8 @@ The skill tells the agent how to brief the worker and how to check the result. C
 - **This is not Hermes' approval.** Hermes asks a person before each call. Here the person is whoever answers the host's tool prompt, and a host set to auto-approve skips that. `GOGOGOOGLE_MCP_ALLOW_DO=1` together with an auto-approving host runs agy unattended with its permission prompts skipped; do not leave that combination running on work you have not read.
 - A foreground run holds the tool call for up to `minutes` (default 10) plus verification. If your host ends tool calls sooner, lower `minutes`. One Codex call ended at Codex's 300-second limit in testing.
 - `background=true` returns a job id; poll with `job`. Jobs live in the server process: after the host restarts the server, a job that was still running reads `UNKNOWN`.
-- Browser tools for agy are off on this path.
+- Browser tools for agy are off on this path, so `research` cannot open web pages here: agy's web search returns search-engine summaries, and on agy 1.5.9 its page-reading tool was never called in headless runs (observed 2026-11-16). The worker is told to mark any item that needs an unopened page `UNVERIFIED`. To research specific pages, have your own agent fetch them into the workdir as files, then delegate research over those files.
+- Image generation works through `do` (agy's `generate_image` tool wrote a 1024x1024 PNG in a test run), so it needs `GOGOGOOGLE_MCP_ALLOW_DO=1`; use a throwaway folder.
 
 ### What has been tested
 

@@ -385,10 +385,15 @@ class PluginTests(unittest.TestCase):
         with patch.object(plugin, "BROWSER_MODE", "headless"):
             plugin.register(Context("off"))
             self.assertEqual(plugin.BROWSER_MODE, "off")
-            self.assertIn("Do not use browser or Playwright tools", plugin._role_prompt("research"))
+            off = plugin._role_prompt("research")
+            self.assertIn("cannot open web pages", off)
+            # a search summary once came back as "full JSON ... DONE" with fields the page does not have
+            self.assertIn("never mark an item DONE", off)
+            self.assertNotIn("fxtwitter", off)  # a URL tip is useless when no page can be opened
             plugin.register(Context("visible"))
             self.assertIn("browser_navigate", plugin._role_prompt("research"))
-            self.assertNotIn("Do not use browser", plugin._role_prompt("research"))
+            self.assertIn("fxtwitter", plugin._role_prompt("research"))
+            self.assertNotIn("cannot open web pages", plugin._role_prompt("research"))
             self.assertEqual(plugin._role_prompt("review"), plugin.ROLES["review"])
             for bad in ("hidden", 1, None):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
