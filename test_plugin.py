@@ -420,6 +420,20 @@ class PluginTests(unittest.TestCase):
             self.assertTrue(agy.call_args.kwargs["allow_edits"])
             self.assertIn("Discordbot/2.0", agy.call_args.args[0])
 
+    def test_visual_review_is_read_only_and_opens_the_named_images(self):
+        prompt = plugin._role_prompt("visual-review")
+        self.assertIn("view_file", prompt)
+        self.assertIn(plugin.NO_SHELL, prompt)
+        self.assertIn("visual-review", plugin.DELEGATE["parameters"]["properties"]["role"]["enum"])
+        with tempfile.TemporaryDirectory() as d, patch.object(plugin, "WEB_RESEARCH", True), \
+             patch.object(plugin, "_snap", return_value="same"), patch.object(plugin, "_git", return_value=""), \
+             patch.object(plugin, "_log"), patch.object(plugin, "_agy", return_value=("OK", "done", "", "c", {})) as agy, \
+             patch.object(plugin, "_verify", return_value="VERIFY PASS (m)") as verify:
+            plugin._work("judge a.png", d, "visual-review", 1, True, "")
+            self.assertFalse(agy.call_args.kwargs["allow_edits"])  # web research never reaches this role
+            self.assertFalse(verify.call_args.args[4])
+            self.assertIn("judge a.png", verify.call_args.args[0])  # the verifier gets the task, so it re-opens the same images
+
     def test_web_verifier_is_told_not_to_obey_pages_and_hermes_cannot_turn_web_research_on(self):
         with patch.object(plugin, "_cooling", return_value={}), \
              patch.object(plugin, "_agy", return_value=("OK", "VERDICT: PASS\nok", "", "", {})) as agy:

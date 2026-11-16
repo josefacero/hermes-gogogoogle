@@ -146,6 +146,13 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("permission prompts skipped", prep["notice"])
         self.assertFalse(web.prepare(dict(self.request, role="review"))["skip_permissions"])  # review never gets it
 
+    def test_visual_review_is_accepted_and_never_skips_permissions(self):
+        both = self.module.Adapter(self.backend, trusted=True, host="h", allowed_roots=[str(self.module.Path.cwd())],
+                                   allow_do=True, web_research=True)
+        prep = both.prepare(dict(self.request, role="visual-review"))
+        self.assertEqual("visual-review", prep["request"]["role"])
+        self.assertFalse(prep["skip_permissions"])
+
     def test_drive_root_and_home_are_refused_as_roots(self):
         for root in (self.module.Path.cwd().anchor, str(self.module.Path.home())):
             with self.assertRaises(ValueError):

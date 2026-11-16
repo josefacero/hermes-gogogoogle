@@ -91,6 +91,17 @@ ROLES = {
                  "include a line starting with its number and DONE, MISSING or UNVERIFIED. "
                  "Reply with Summary, Findings, Details, Unverified."),
     "review": "Review only. Do not modify any file. " + NO_SHELL + "Reply with problems ranked worst first, each with file and line.",
+    "visual-review": ("Visual review only. Do not modify, move or overwrite any file. " + NO_SHELL +
+                      "The task names image files (png, jpg, webp) in the working folder. Open every one yourself with view_file "
+                      "before you say anything about it; an image you could not open is UNVERIFIED, and never describe one from its "
+                      "filename or from what the task expects. For each image, describe what you actually see (subject, framing, "
+                      "light, colours) in a line or two, then turn the task's requirements into yes/no checks and answer each as "
+                      "PASS, FAIL or CANNOT JUDGE, with where in the frame you saw it; say CANNOT JUDGE when a detail is too small "
+                      "to judge. Then look for defects the task did not name: clipping, seams and halos, banding, colour shifts "
+                      "between images that should match, warped faces, hands or text, repeated or missing elements. With several "
+                      "images, compare them and say which one differs. Give positions (upper left, left edge) a person can check "
+                      "in seconds. Reply with Verdict (PASS, RE-RENDER REQUIRED or CANNOT JUDGE, with one sentence why), Per image, "
+                      "Visual anomalies, What I could not verify."),
 }
 # Why a run failed, so a dead model, empty quota or busy service moves to the next model but a real error does not.
 FAIL_KINDS = [("quota", re.compile(r"quota|rate.?limit|exhausted|\b429\b", re.I)),
@@ -108,7 +119,7 @@ DELEGATE = {
     "parameters": {"type": "object", "properties": {
         "task": {"type": "string", "description": "What to do. Be specific; agy has no memory of this chat."},
         "workdir": {"type": "string", "description": "Existing folder agy works in."},
-        "role": {"type": "string", "enum": list(ROLES), "description": "do (may edit files), research or review (told not to edit)."},
+        "role": {"type": "string", "enum": list(ROLES), "description": "do (may edit files); research, review or visual-review (told not to edit). visual-review judges image files in workdir that the task names."},
         "minutes": {"type": "integer", "description": "Time limit, 1 to 30. Default 10."},
         "verify": {"type": "boolean", "description": "Run a fresh verifier pass on the result. Default true."},
         "background": {"type": "boolean", "description": "Return a job id at once; poll it with antigravity_job. Use for runs over a minute."},

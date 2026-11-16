@@ -145,7 +145,7 @@ class Adapter:
         verify = args.get("verify", True)
         background = args.get("background", False)
         resume = args.get("resume", "")
-        if (role not in ("do", "research", "review") or type(minutes) is not int or not 1 <= minutes <= 30
+        if (role not in ("do", "research", "review", "visual-review") or type(minutes) is not int or not 1 <= minutes <= 30
                 or type(verify) is not bool or type(background) is not bool or not isinstance(resume, str)
                 or (resume and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", resume))):
             raise Refused("invalid delegation options")
@@ -262,7 +262,7 @@ def main():
         @server.tool()
         def prepare(task: str, role: str, workdir: str = "", minutes: int = 10,
                     verify: bool = True, background: bool = False, resume: str = "", worker: str = "") -> dict:
-            """Show a request and issue a single-use code; this is not human approval. role: do, research or review.
+            """Show a request and issue a single-use code; this is not human approval. role: do, research, review or visual-review (name the image files in workdir in the task).
             worker (experimental): name of an operator-configured remote worker; review only, its folder is fixed by the operator."""
             return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
                                             "verify": verify, "background": background, "resume": resume, "worker": worker})
@@ -270,7 +270,7 @@ def main():
         @server.tool()
         def prepare(task: str, workdir: str, role: str, minutes: int = 10,
                     verify: bool = True, background: bool = False, resume: str = "") -> dict:
-            """Show a local request and issue a single-use code; this is not human approval. role: do, research or review."""
+            """Show a local request and issue a single-use code; this is not human approval. role: do, research, review or visual-review (name the image files in workdir in the task)."""
             return invoke(adapter.prepare, {"task": task, "workdir": workdir, "role": role, "minutes": minutes,
                                             "verify": verify, "background": background, "resume": resume})
 
