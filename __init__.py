@@ -78,7 +78,10 @@ RESEARCH_WEB = ("You may run curl or Python (standard library) only to GET publi
 ROLES = {
     "do": "Do the task. Edit files in the working folder as needed. End with a list of every file you changed.",
     "research": ("Research only. Do not modify files. Open primary sources where possible and cite each non-obvious "
-                 "claim with a URL or file and line. Distinguish observed facts from inference. Copy dates and numbers "
+                 "claim with a URL or file and line. Distinguish observed facts from inference. Before you report, check that "
+                 "each quoted phrase and each cited fact appears in the text you got from the exact URL or file you cite it to "
+                 "(when two sources say it, cite the one you checked), and label a conclusion of your own as inference, never "
+                 "as an observed fact. Copy dates and numbers "
                  "from sources opened in this run. Put claims without evidence and inaccessible sources in Unverified; "
                  "never present snippets or old notes as independently verified. The lead must check sources before acting. "
                  + NO_SHELL + RESEARCH_FETCH +

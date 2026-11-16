@@ -774,6 +774,10 @@ class PluginTests(unittest.TestCase):
         self.assertIn("denied", plugin.ROLES["research"])
         self.assertNotIn("mcp(", json.dumps(plugin.ROLES))
 
+    def test_research_prompt_asks_the_worker_to_check_its_own_citations(self):
+        self.assertIn("exact URL or file you cite it to", plugin.ROLES["research"])
+        self.assertIn("never as an observed fact", plugin.ROLES["research"])
+
     def test_job_file_locked_for_a_moment_is_retried(self):
         real_replace, real_read, calls = plugin.os.replace, Path.read_text, {"replace": 0, "read": 0}
         def replace(a, b):
