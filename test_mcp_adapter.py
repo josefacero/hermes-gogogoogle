@@ -189,6 +189,19 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual("job result", self.adapter.job({"id": "abc"}))
         self.assertEqual("stats result", self.adapter.stats({}))
 
+    def test_job_wait_holds_until_the_job_leaves_running_and_is_capped(self):
+        replies = iter(['{"status": "RUNNING"}', '{"status": "RUNNING"}', '{"status": "OK", "result": "done"}'])
+        self.backend.job = lambda args: (self.backend.calls.append(("job", args)), next(replies))[1]
+        with patch.object(self.module, "JOB_POLL_SECONDS", 0):
+            self.assertIn('"OK"', self.adapter.job({"id": "abc", "wait": 60}))
+        self.assertEqual([("job", {"id": "abc"})] * 3, self.backend.calls)  # wait is not passed to the backend
+        self.backend.calls.clear()
+        self.backend.job = lambda args: '{"status": "RUNNING"}'
+        with patch.object(self.module, "JOB_WAIT_LIMIT", 0):
+            self.assertIn("RUNNING", self.adapter.job({"id": "abc", "wait": 9999}))  # the cap ends the wait
+        self.assertEqual({"error": "wait must be a number of seconds"},
+                         self.module.invoke(self.adapter.job, {"id": "abc", "wait": "soon"}))
+
     def test_invalid_root_configuration_fails_closed(self):
         for roots in (None, [], [""], ["."], [str(self.module.Path.cwd() / "missing-root")], "not-a-list"):
             with self.subTest(roots=roots):

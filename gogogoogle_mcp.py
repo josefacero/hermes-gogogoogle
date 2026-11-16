@@ -21,6 +21,8 @@ CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # no 0/o, 1/l/i: a calling ag
 CODE_LENGTH = 12
 CODE_SECONDS = 300
 REMOTE_TASK_LIMIT = 1000  # same limit as the Hermes tool and the worker's lead-approved mode
+JOB_WAIT_LIMIT = 240  # under Codex's 300-second tool-call limit seen in testing
+JOB_POLL_SECONDS = 5
 
 
 class Refused(ValueError):
@@ -194,8 +196,24 @@ class Adapter:
         return result
 
     def job(self, args):
+        """With wait > 0, hold the call until the job leaves RUNNING or wait seconds pass, so the agent polls less."""
         self._check()
-        return self.backend.job(args)
+        args = dict(args)
+        try:
+            wait = min(max(int(args.pop("wait", 0) or 0), 0), JOB_WAIT_LIMIT)
+        except (TypeError, ValueError):
+            raise Refused("wait must be a number of seconds")
+        end = time.monotonic() + wait
+        while True:
+            reply = self.backend.job(args)
+            left = end - time.monotonic()
+            try:
+                running = json.loads(reply).get("status") == "RUNNING"
+            except (ValueError, AttributeError):
+                running = False
+            if not running or left <= 0:
+                return reply
+            time.sleep(min(JOB_POLL_SECONDS, left))
 
     def stats(self, args):
         self._check()
@@ -262,9 +280,10 @@ def main():
         return invoke(adapter.delegate, token)
 
     @server.tool()
-    def job(id: str) -> str | dict:
-        """Get the status or result of a background job."""
-        return invoke(adapter.job, {"id": id})
+    def job(id: str, wait: int = 0) -> str | dict:
+        """Get the status or result of a background job. wait (seconds, at most 240) holds the call until the job
+        finishes or the time passes; use wait=240 instead of polling repeatedly."""
+        return invoke(adapter.job, {"id": id, "wait": wait})
 
     @server.tool()
     def stats() -> str | dict:
