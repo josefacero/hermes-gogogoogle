@@ -597,6 +597,7 @@ class PluginTests(unittest.TestCase):
             (Path(d) / ".playwright-mcp").mkdir()
             result = plugin._work("look", d, "research", 1, True, "")
         self.assertIn(".gitignore", result["browser_files"])
+        self.assertIn("may predate this run", result["browser_files"])
         self.assertTrue(result["verify"].startswith("VERIFY PASS"))
 
     def test_null_verify_still_verifies(self):

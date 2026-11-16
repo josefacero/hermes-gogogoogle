@@ -37,7 +37,7 @@ def work(task, workdir, role, minutes, verify, resume, progress, api):
             out["warning"] = (f"READ-ONLY VIOLATION: role '{role}' must not edit files but the working tree changed. "
                               "Inspect the changes and decide how to restore only unwanted work.")
     if (Path(workdir) / ".playwright-mcp").exists():
-        out["browser_files"] = ("agy's browser tool left a .playwright-mcp/ folder here. The change check ignores it. "
+        out["browser_files"] = ("A .playwright-mcp/ folder exists here; it may predate this run. The change check ignores it. "
                                 "Delete it or add it to .gitignore before `git add -A`.")
     if status == "TIMED OUT" and conv:
         out["note"] = f"Stopped at the {minutes}-minute limit; call again with resume='{conv}' to continue."

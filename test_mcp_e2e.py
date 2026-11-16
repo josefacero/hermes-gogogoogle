@@ -50,7 +50,8 @@ def _make_repo(folder):
 
 
 def _payload(result):
-    data = result.structured_content or json.loads(result.content[0].text)
+    data = (getattr(result, "structuredContent", None) or
+            getattr(result, "structured_content", None) or json.loads(result.content[0].text))
     inner = data.get("result", data)
     return json.loads(inner) if isinstance(inner, str) else inner
 
