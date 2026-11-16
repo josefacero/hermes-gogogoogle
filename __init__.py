@@ -66,7 +66,12 @@ RESEARCH_WEB = ("You may run curl or Python (standard library) only to GET publi
                 "fixupx.com (X), tnktok.com (TikTok) and vxreddit.com (Reddit post links only) return a post's text and media "
                 "links in og: meta tags when requested with the User-Agent 'Mozilla/5.0 (compatible; Discordbot/2.0)'; "
                 "https://www.tiktok.com/oembed?url=<video url> returns embed HTML only; Reddit feeds: append /.rss to a "
-                "subreddit or post URL and use a browser User-Agent, and after HTTP 429 wait at least 30 seconds; a public "
+                "subreddit or post URL and use a browser User-Agent, and after HTTP 429 wait at least 30 seconds; Reddit "
+                "search pages return 403, so search the public archive instead: https://arctic-shift.photon-reddit.com/api/"
+                "posts/search?subreddit=<name>&query=<words>&after=<YYYY-MM-DD>&limit=10 (keep the after= date: without it "
+                "the archive often answers 'Timeout. Maybe slow down a bit'; wait a few seconds and retry once), then a "
+                "thread's comments from .../api/comments/search?link_id=t3_<post id>&limit=10; archive scores are snapshots, "
+                "and the archive's matching is loose, so judge each thread by its title and text; a public "
                 "Facebook Page gives only its name and description in og: tags, so do not try to read Facebook posts. "
                 "Quote only text you fetched in this run, and name the URL and User-Agent that returned it; mark anything "
                 "you could not fetch UNVERIFIED. ")
